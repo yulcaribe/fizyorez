@@ -158,13 +158,20 @@ try {
             ApiResponse::ok(['payments' => PaymentService::list($user, isset($_GET['status']) ? (string) $_GET['status'] : null)]);
         }
         if ($method === 'POST' && $id === null) {
+            if ($user['role'] === 'customer') {
+                ApiResponse::ok(['payment' => PaymentService::purchaseWithWallet(
+                    $user,
+                    (string) ($body['target_type'] ?? ''),
+                    (int) ($body['target_id'] ?? 0)
+                )]);
+            }
             ApiResponse::ok(['payment' => PaymentService::create($user, $body)]);
         }
         if ($id && $operation === 'approve' && $method === 'POST') {
             ApiResponse::ok(['payment' => PaymentService::approve($user, $id)]);
         }
         if ($id && $operation === 'cancel' && $method === 'POST') {
-            ApiResponse::ok(['payment' => PaymentService::cancel($user, $id)]);
+            ApiResponse::ok(['payment' => PaymentService::cancel($user, $id, (string) ($body['note'] ?? ''))]);
         }
         if ($id && $operation === 'refund' && $method === 'POST') {
             ApiResponse::ok(['payment' => PaymentService::refund($user, $id, (string) ($body['note'] ?? ''))]);
@@ -208,6 +215,8 @@ try {
             if ($walletCustomerId < 1) ApiResponse::error('customer_id zorunludur.', 422);
             ApiResponse::ok([
                 'balance' => WalletService::balance($walletCustomerId),
+                'reserved_balance' => WalletService::reservedBalance($walletCustomerId),
+                'available_balance' => WalletService::availableBalance($walletCustomerId),
                 'transactions' => WalletService::transactions($user, $walletCustomerId),
             ]);
         }

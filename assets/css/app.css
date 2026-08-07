@@ -243,9 +243,9 @@ tbody tr:hover { background: #f8fbfa; }
 tbody tr:last-child td { border-bottom: 0; }
 
 .badge { display: inline-flex; min-height: 25px; align-items: center; padding: 4px 9px; border-radius: 99px; background: #eaf0ef; color: var(--ink-700); font-size: 10px; font-weight: 900; letter-spacing: .02em; white-space: nowrap; }
-.badge.confirmed, .badge.completed, .badge.paid, .badge.active { background: #e4f6eb; color: #167143; }
+.badge.confirmed, .badge.completed, .badge.paid, .badge.approved, .badge.active { background: #e4f6eb; color: #167143; }
 .badge.pending, .badge.awaiting_approval { background: #fff3db; color: #9b5b08; }
-.badge.cancelled, .badge.no_show, .badge.suspended { background: #ffebeb; color: #a83232; }
+.badge.cancelled, .badge.rejected, .badge.no_show, .badge.suspended { background: #ffebeb; color: #a83232; }
 .badge.refunded, .badge.passive { background: #e9eff8; color: #4a6384; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -332,6 +332,22 @@ details.user-row > .user-row-summary:hover { background: #f8fbfa; }
 .wallet-hero .eyebrow { color: #8ee0d5; }
 .wallet-amount.is-positive { color: var(--green); }
 .wallet-amount.is-negative { color: var(--red); }
+.wallet-breakdown { display: flex; gap: 12px; }
+.wallet-breakdown span { display: grid; gap: 3px; min-width: 145px; padding: 13px 16px; border: 1px solid rgb(255 255 255 / 16%); border-radius: 13px; background: rgb(255 255 255 / 8%); }
+.wallet-breakdown small { color: #a9d8d2; }
+.wallet-breakdown strong { font-size: 17px; }
+.flow-steps { display: grid; gap: 12px; margin-top: 20px; }
+.flow-steps span { display: flex; align-items: center; gap: 11px; color: var(--ink-700); }
+.flow-steps b { display: grid; width: 29px; height: 29px; flex: 0 0 29px; place-items: center; border-radius: 50%; background: var(--brand-50); color: var(--brand-700); }
+.purchase-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 13px; }
+.purchase-card { display: flex; min-height: 175px; flex-direction: column; justify-content: space-between; gap: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface-soft); }
+.purchase-card h3 { margin: 0 0 6px; color: var(--ink-950); }
+.purchase-card p { margin: 0 0 8px; color: var(--muted); }
+.purchase-card footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 13px; border-top: 1px solid var(--line); }
+.purchase-card footer strong { color: var(--ink-950); font-size: 18px; }
+.financial-tabs { margin-top: 2px; }
+.financial-ledger .table-wrap table { min-width: 1320px; }
+.financial-ledger td small { max-width: 210px; }
 .booking-matrix-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
 .booking-matrix { width: max-content; min-width: 760px; table-layout: auto; }
 .booking-matrix th, .booking-matrix td { min-width: 180px; padding: 9px; border-right: 1px solid var(--line); text-align: center; }
@@ -469,6 +485,8 @@ hr { width: 100%; height: 1px; margin: 5px 0; border: 0; background: var(--line)
     .schedule-hours { grid-column: 1 / -1; }
     .schedule-action { grid-column: 2; grid-row: 3; }
     .wallet-hero { align-items: flex-start; flex-direction: column; }
+    .wallet-breakdown { width: 100%; flex-direction: column; }
+    .wallet-breakdown span { min-width: 0; }
     .cards-5, .cards-4, .cards-3, .form-grid, .form-grid.compact { grid-template-columns: 1fr; }
     .metric { min-height: 104px; }
     .welcome-card { align-items: flex-start; flex-direction: column; }

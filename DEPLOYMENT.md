@@ -32,9 +32,10 @@ Mevcut FizyoRez veritabanındaki kullanıcı, paket, ödeme ve randevuları koru
 database/migrations/002_wallets_date_calendars.sql
 database/migrations/003_reservation_change_approvals.sql
 database/migrations/004_wallet_adjust_permission.sql
+database/migrations/005_unified_financial_transactions.sql
 ```
 
-Bu yükseltmeler test cüzdanı, tarih bazlı takvim, rezervasyon tarih değişikliği onayı ve gerekçeli bakiye düzeltme yetkisini ekler; mevcut kayıtları silmez. Yeni tarih kayıtları ilgili takvim ekranı ilk açıldığında otomatik oluşur.
+Bu yükseltmeler test cüzdanı, tarih bazlı takvim, rezervasyon tarih değişikliği onayı, gerekçeli bakiye düzeltme yetkisi ve birleşik finans günlüğünü ekler; mevcut kayıtları silmez. `005` numaralı migration eski `payments` ve `wallet_transactions` hareketlerini yeni `financial_transactions` tablosuna kopyalar. Eski tablolar güvenli geçiş ve karşılaştırma için silinmez, uygulamanın yeni işlemleri yalnızca birleşik tabloya yazılır. Yeni tarih kayıtları ilgili takvim ekranı ilk açıldığında otomatik oluşur.
 
 Demo şemasındaki hesaplar yalnızca yerel/beta test içindir ve varsayılan şifreleri `password` değeridir. İnternete açık kurulumda demo hesaplarını pasife alın ve gerçek süper yönetici şifresini hemen değiştirin.
 
@@ -47,7 +48,7 @@ Tarayıcıda `/health` adresini açın. Tüm satırlar “Hazır” olmalıdır.
 - Danışan üyeliği: `/register`
 - Beta API durumu: `/api/v1/health`
 
-Varsayılan bakiye simülasyon kartı `4242 4242 4242 4242`, son kullanma `12/30`, CVV `123` değeridir. Süper yönetici bunu Ayarlar > Ödeme ayarları bölümünden değiştirebilir. Bu akış gerçek tahsilat yapmaz ve tam kart bilgilerini veritabanına kaydetmez.
+Varsayılan bakiye simülasyon kartı `4242 4242 4242 4242`, son kullanma `12/30`, CVV `123` değeridir. Süper yönetici bunu Ayarlar > Ödeme ayarları bölümünden değiştirebilir. Bu akış gerçek tahsilat yapmaz; tam kart bilgisi ve CVV veritabanına kaydedilmez. Kart doğrulansa bile bakiye, rolünde `payments.approve` yetkisi bulunan kişi onaylayana kadar değişmez. Süper yönetici kendi oluşturduğu hareketi onaylayabilir; diğer roller kendi hareketlerini onaylayamaz.
 
 ## 5. E-posta kuyruğu
 

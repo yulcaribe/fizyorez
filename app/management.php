@@ -189,34 +189,14 @@ final class Management
     public static function assignPackage(array $actor, array $data): array
     {
         Authorization::require($actor, 'packages.manage');
-        $package = DB::fetch('SELECT * FROM packages WHERE id = ? AND active = 1', [(int) ($data['package_id'] ?? 0)]);
-        $customer = DB::fetch('SELECT id FROM users WHERE id = ? AND role = "customer" AND status = "active"', [(int) ($data['customer_id'] ?? 0)]);
-        if (!$package || !$customer) {
-            throw new RuntimeException('Paket veya aktif danışan bulunamadı.');
-        }
-
         $startsAt = (string) ($data['starts_at'] ?? date('Y-m-d'));
-        $start = DateTimeImmutable::createFromFormat('Y-m-d', $startsAt);
-        if (!$start) {
-            throw new RuntimeException('Paket başlangıç tarihi geçersiz.');
-        }
-        $expiresAt = $start->modify('+' . (int) $package['validity_days'] . ' days')->format('Y-m-d');
 
-        DB::pdo()->beginTransaction();
-        try {
-            $id = DB::insert(
-                'INSERT INTO customer_packages (customer_id, package_id, credits_total, credits_remaining, starts_at, expires_at, status, payment_status, created_at) VALUES (?, ?, ?, ?, ?, ?, "active", "pending", NOW())',
-                [(int) $customer['id'], (int) $package['id'], (int) $package['total_credits'], (int) $package['total_credits'], $startsAt, $expiresAt]
-            );
-            CreditLedger::recordOpeningBalance($id, (int) $actor['id']);
-            Audit::record((int) $actor['id'], 'customer_package.assigned', 'customer_package', $id);
-            DB::pdo()->commit();
-        } catch (Throwable $e) {
-            DB::pdo()->rollBack();
-            throw $e;
-        }
-
-        return (array) DB::fetch(self::customerPackageSql() . ' WHERE cp.id = ?', [$id]);
+        return PaymentService::requestPackageForCustomer(
+            $actor,
+            (int) ($data['customer_id'] ?? 0),
+            (int) ($data['package_id'] ?? 0),
+            $startsAt
+        );
     }
 
     public static function customerPackageSql(): string
@@ -241,7 +221,17 @@ final class Management
         $completed = DB::fetch('SELECT COUNT(*) AS total FROM reservations WHERE status = "completed" AND starts_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)' . $consultantFilter, $params);
         $noShow = DB::fetch('SELECT COUNT(*) AS total FROM reservations WHERE status = "no_show" AND starts_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)' . $consultantFilter, $params);
         $revenue = can($user, 'payments.view_all')
-            ? DB::fetch('SELECT COALESCE(SUM(amount), 0) AS total FROM payments WHERE status = "paid" AND approved_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)')
+            ? DB::fetch(
+                'SELECT COALESCE(SUM(
+                    CASE
+                        WHEN transaction_type = "topup" AND direction = "credit" THEN amount
+                        WHEN transaction_type = "refund" AND direction = "debit" THEN -amount
+                        ELSE 0
+                    END
+                 ), 0) AS total
+                 FROM financial_transactions
+                 WHERE status = "approved" AND reviewed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)'
+            )
             : ['total' => 0];
 
         return [

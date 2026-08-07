@@ -203,6 +203,7 @@ function setup_checks(): array
             'customer_packages',
             'customer_wallets',
             'wallet_transactions',
+            'financial_transactions',
             'consultant_availability',
             'consultant_calendar_days',
             'consultant_calendar_slots',

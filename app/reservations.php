@@ -94,7 +94,7 @@ final class ReservationService
 
             $customerPackageId = null;
             $creditsDeducted = 0;
-            $paymentStatus = 'pending';
+            $paymentStatus = (float) $service['price'] <= 0 ? 'paid' : 'pending';
             $price = (float) $service['price'];
 
             if ($reservationType === 'package') {
@@ -676,7 +676,7 @@ final class ReservationService
                 'SELECT cp.*, p.name AS package_name
                  FROM customer_packages cp
                  INNER JOIN packages p ON p.id = cp.package_id
-                 WHERE cp.id = ? AND cp.customer_id = ? AND cp.status = "active" AND cp.expires_at >= CURDATE()
+                 WHERE cp.id = ? AND cp.customer_id = ? AND cp.status = "active" AND cp.payment_status = "paid" AND cp.expires_at >= CURDATE()
                  LIMIT 1',
                 [$requestedPackageId, $customerId]
             );
@@ -685,7 +685,7 @@ final class ReservationService
                 'SELECT cp.*, p.name AS package_name
                  FROM customer_packages cp
                  INNER JOIN packages p ON p.id = cp.package_id
-                 WHERE cp.customer_id = ? AND cp.status = "active" AND cp.expires_at >= CURDATE()
+                 WHERE cp.customer_id = ? AND cp.status = "active" AND cp.payment_status = "paid" AND cp.expires_at >= CURDATE()
                  ORDER BY cp.expires_at ASC, cp.id ASC
                  LIMIT 1',
                 [$customerId]

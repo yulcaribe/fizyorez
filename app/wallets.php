@@ -13,12 +13,39 @@ final class WalletService
         return round((float) ($wallet['balance'] ?? 0), 2);
     }
 
+    public static function reservedBalance(int $customerId): float
+    {
+        self::assertCustomer($customerId);
+        $row = DB::fetch(
+            'SELECT COALESCE(SUM(reserved_amount), 0) AS total
+             FROM financial_transactions
+             WHERE customer_id = ? AND direction = "debit" AND status = "awaiting_approval"',
+            [$customerId]
+        );
+
+        return round((float) ($row['total'] ?? 0), 2);
+    }
+
+    public static function availableBalance(int $customerId): float
+    {
+        return max(0, round(self::balance($customerId) - self::reservedBalance($customerId), 2));
+    }
+
     public static function balancesForCustomers(): array
     {
         return DB::fetchAll(
-            'SELECT u.id, u.name, COALESCE(w.balance, 0) AS wallet_balance
+            'SELECT u.id, u.name,
+                    COALESCE(w.balance, 0) AS wallet_balance,
+                    COALESCE(pending.reserved_balance, 0) AS reserved_balance,
+                    GREATEST(COALESCE(w.balance, 0) - COALESCE(pending.reserved_balance, 0), 0) AS available_balance
              FROM users u
              LEFT JOIN customer_wallets w ON w.customer_id = u.id
+             LEFT JOIN (
+                SELECT customer_id, SUM(reserved_amount) AS reserved_balance
+                FROM financial_transactions
+                WHERE direction = "debit" AND status = "awaiting_approval"
+                GROUP BY customer_id
+             ) pending ON pending.customer_id = u.id
              WHERE u.role = "customer"
              ORDER BY u.name'
         );
@@ -27,77 +54,41 @@ final class WalletService
     public static function transactions(array $actor, ?int $customerId = null): array
     {
         if ($actor['role'] === 'customer') {
-            $customerId = (int) $actor['id'];
-        } else {
-            if (!can($actor, 'payments.view_all') && !can($actor, 'wallets.adjust')) {
-                throw new RuntimeException('Bakiye hareketlerini görüntüleme yetkiniz yok.');
+            return PaymentService::list($actor);
+        }
+        if (!can($actor, 'payments.view_all') && !can($actor, 'wallets.adjust')) {
+            throw new RuntimeException('Bakiye hareketlerini görüntüleme yetkiniz yok.');
+        }
+        if (can($actor, 'payments.view_all')) {
+            if ($customerId === null) {
+                return PaymentService::list($actor);
             }
+            self::assertCustomer($customerId);
+            return DB::fetchAll(
+                'SELECT ft.*, u.name AS customer_name, creator.name AS created_by_name, reviewer.name AS reviewed_by_name
+                 FROM financial_transactions ft
+                 INNER JOIN users u ON u.id = ft.customer_id
+                 LEFT JOIN users creator ON creator.id = ft.created_by
+                 LEFT JOIN users reviewer ON reviewer.id = ft.reviewed_by
+                 WHERE ft.customer_id = ? ORDER BY ft.id DESC LIMIT 500',
+                [$customerId]
+            );
         }
 
-        $where = $customerId ? 'WHERE wt.customer_id = ?' : '';
-        $params = $customerId ? [$customerId] : [];
-
         return DB::fetchAll(
-            'SELECT wt.*, u.name AS customer_name, creator.name AS created_by_name
-             FROM wallet_transactions wt
-             INNER JOIN users u ON u.id = wt.customer_id
-             LEFT JOIN users creator ON creator.id = wt.created_by
-             ' . $where . '
-             ORDER BY wt.id DESC LIMIT 200',
-            $params
+            'SELECT ft.*, u.name AS customer_name, creator.name AS created_by_name, reviewer.name AS reviewed_by_name
+             FROM financial_transactions ft
+             INNER JOIN users u ON u.id = ft.customer_id
+             LEFT JOIN users creator ON creator.id = ft.created_by
+             LEFT JOIN users reviewer ON reviewer.id = ft.reviewed_by
+             WHERE ft.transaction_type = "manual_adjustment"
+             ORDER BY ft.id DESC LIMIT 200'
         );
     }
 
     public static function adjust(array $actor, int $customerId, float $amount, string $note): array
     {
-        Authorization::require($actor, 'wallets.adjust');
-        self::assertCustomer($customerId);
-        $amount = round($amount, 2);
-        $note = trim($note);
-        if ($amount === 0.0 || abs($amount) > 1000000) {
-            throw new RuntimeException('Bakiye düzeltmesi sıfırdan farklı ve en fazla 1.000.000 olmalıdır.');
-        }
-        if (mb_strlen($note) < 3) {
-            throw new RuntimeException('Bakiye düzeltme nedeni zorunludur.');
-        }
-
-        self::ensureWallet($customerId);
-        DB::pdo()->beginTransaction();
-        try {
-            $wallet = DB::fetch('SELECT balance FROM customer_wallets WHERE customer_id = ? FOR UPDATE', [$customerId]);
-            $before = round((float) ($wallet['balance'] ?? 0), 2);
-            $after = round($before + $amount, 2);
-            if ($after < 0) {
-                throw new RuntimeException('Düzeltme sonrasında danışan bakiyesi eksiye düşemez.');
-            }
-
-            DB::execute('UPDATE customer_wallets SET balance = ?, updated_at = NOW() WHERE customer_id = ?', [$after, $customerId]);
-            $reference = 'ADJ-' . date('YmdHis') . '-' . strtoupper(bin2hex(random_bytes(3)));
-            $id = DB::insert(
-                'INSERT INTO wallet_transactions
-                    (customer_id, transaction_type, amount, balance_before, balance_after, status, provider, reference_no, card_last_four, note, created_by, created_at)
-                 VALUES (?, "manual", ?, ?, ?, "approved", "manual_adjustment", ?, NULL, ?, ?, NOW())',
-                [$customerId, $amount, $before, $after, $reference, $note, $actor['id']]
-            );
-            Audit::record((int) $actor['id'], 'wallet.adjusted', 'wallet_transaction', $id, [
-                'customer_id' => $customerId,
-                'amount' => $amount,
-                'balance_before' => $before,
-                'balance_after' => $after,
-                'reason' => $note,
-            ]);
-            DB::pdo()->commit();
-        } catch (Throwable $e) {
-            DB::pdo()->rollBack();
-            throw $e;
-        }
-
-        return [
-            'transaction_id' => $id,
-            'reference_no' => $reference,
-            'balance_before' => $before,
-            'balance_after' => $after,
-        ];
+        return PaymentService::createAdjustment($actor, $customerId, $amount, $note);
     }
 
     public static function testCard(): array
@@ -115,7 +106,6 @@ final class WalletService
             throw new RuntimeException('Test bakiye yükleme yalnızca danışan portalından yapılabilir.');
         }
 
-        $customerId = (int) $actor['id'];
         $amount = round((float) ($data['amount'] ?? 0), 2);
         $cardholder = trim((string) ($data['cardholder'] ?? ''));
         $cardNumber = preg_replace('/\D+/', '', (string) ($data['card_number'] ?? ''));
@@ -130,58 +120,23 @@ final class WalletService
         }
 
         $testCard = self::testCard();
-        $approved = hash_equals($testCard['number'], $cardNumber)
+        $accepted = hash_equals($testCard['number'], $cardNumber)
             && hash_equals($testCard['expiry'], $expiry)
             && hash_equals($testCard['cvv'], $cvv);
         $reference = 'TEST-' . strtoupper(bin2hex(random_bytes(5)));
         $lastFour = substr($cardNumber, -4);
+        $cardBrand = str_starts_with($cardNumber, '4') ? 'Visa' : (str_starts_with($cardNumber, '5') ? 'Mastercard' : 'Test kartı');
+        $transaction = PaymentService::recordCustomerCardTopUp($actor, $amount, $cardBrand, $lastFour, $accepted, $reference);
 
-        self::ensureWallet($customerId);
-        DB::pdo()->beginTransaction();
-        try {
-            $wallet = DB::fetch('SELECT balance FROM customer_wallets WHERE customer_id = ? FOR UPDATE', [$customerId]);
-            $before = round((float) ($wallet['balance'] ?? 0), 2);
-            $after = $approved ? round($before + $amount, 2) : $before;
-
-            if ($approved) {
-                DB::execute('UPDATE customer_wallets SET balance = ?, updated_at = NOW() WHERE customer_id = ?', [$after, $customerId]);
-            }
-
-            $id = DB::insert(
-                'INSERT INTO wallet_transactions
-                    (customer_id, transaction_type, amount, balance_before, balance_after, status, provider, reference_no, card_last_four, note, created_by, created_at)
-                 VALUES (?, "topup", ?, ?, ?, ?, "test_card", ?, ?, ?, ?, NOW())',
-                [
-                    $customerId,
-                    $amount,
-                    $before,
-                    $after,
-                    $approved ? 'approved' : 'rejected',
-                    $reference,
-                    $lastFour,
-                    $approved ? 'Test kartı ile bakiye yükleme onaylandı.' : 'Test kartı doğrulanamadı; bakiye değişmedi.',
-                    $customerId,
-                ]
-            );
-            Audit::record($customerId, $approved ? 'wallet.topup_approved' : 'wallet.topup_rejected', 'wallet_transaction', $id, [
-                'amount' => $amount,
-                'reference' => $reference,
-                'card_last_four' => $lastFour,
-            ]);
-            DB::pdo()->commit();
-        } catch (Throwable $e) {
-            DB::pdo()->rollBack();
-            throw $e;
-        }
-
-        if (!$approved) {
-            throw new RuntimeException('Kart reddedildi. Yalnızca ekranda gösterilen test kartı onay verir; bakiye değişmedi.');
+        if (!$accepted) {
+            throw new RuntimeException('Kart doğrulanamadı; bakiye değişmedi.');
         }
 
         return [
-            'transaction_id' => $id,
+            'transaction_id' => $transaction['id'],
             'reference_no' => $reference,
-            'balance' => $after,
+            'status' => 'awaiting_approval',
+            'balance' => self::balance((int) $actor['id']),
         ];
     }
 
