@@ -10,11 +10,29 @@ document.querySelectorAll('[data-toggle-package]').forEach((select) => {
 
 const menuButton = document.querySelector('[data-menu]');
 if (menuButton) {
-    menuButton.addEventListener('click', () => document.body.classList.toggle('menu-open'));
+    const setMenuOpen = (open) => {
+        document.body.classList.toggle('menu-open', open);
+        menuButton.setAttribute('aria-expanded', String(open));
+    };
+
+    menuButton.addEventListener('click', () => setMenuOpen(!document.body.classList.contains('menu-open')));
     document.addEventListener('click', (event) => {
         if (!document.body.classList.contains('menu-open')) return;
         if (event.target.closest('#sidebar') || event.target.closest('[data-menu]')) return;
-        document.body.classList.remove('menu-open');
+        setMenuOpen(false);
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !document.body.classList.contains('menu-open')) return;
+        setMenuOpen(false);
+        menuButton.focus();
+    });
+    document.querySelectorAll('#sidebar a').forEach((link) => {
+        link.addEventListener('click', () => setMenuOpen(false));
+    });
+
+    const desktopQuery = window.matchMedia('(min-width: 901px)');
+    desktopQuery.addEventListener('change', (event) => {
+        if (event.matches) setMenuOpen(false);
     });
 }
 

@@ -170,7 +170,7 @@ function render_health(): void
     $allOk = !in_array(false, array_column($checks, 'ok'), true);
     ?>
     <!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Kurulum Kontrolü · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css')) ?>"></head>
+    <title>Kurulum Kontrolü · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=6') ?>"></head>
     <body class="auth-page"><main class="auth-card wide"><div class="brand-mark">FR</div><h1>Kurulum kontrolü</h1>
     <p class="muted"><?= $allOk ? 'Sistem çalışmaya hazır.' : 'Aşağıdaki eksikleri giderip tekrar deneyin.' ?></p>
     <div class="table-wrap"><table><thead><tr><th>Kontrol</th><th>Durum</th><th>Detay</th></tr></thead><tbody>
@@ -212,7 +212,7 @@ function render_register(?array $flash): void
 
 function render_auth_start(string $title): void
 {
-    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css')) ?>"></head><body class="auth-page"><?php
+    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=6') ?>"></head><body class="auth-page"><?php
 }
 
 function render_page(array $user, string $path, ?array $flash): void
@@ -221,11 +221,11 @@ function render_page(array $user, string $path, ?array $flash): void
     $title = page_title($path);
     ?>
     <!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=5') ?>"></head><body>
+    <title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=6') ?>"></head><body>
     <div class="app-shell"><aside class="sidebar" id="sidebar"><a href="<?= e(url_for(role_home((string) $user['role']))) ?>" class="brand"><span class="brand-mark">FR</span><span><strong><?= e(config('app.name')) ?></strong><small>Beta</small></span></a><nav class="nav"><?= nav_links($user, $path) ?></nav></aside>
-    <div class="main-shell"><header class="topbar"><button type="button" class="menu-button" data-menu aria-label="Menüyü aç">☰</button><div><p class="eyebrow"><?= e(role_label((string) $user['role'])) ?></p><h1><?= e($title) ?></h1></div><div class="user-box"><span><strong><?= e($user['name']) ?></strong><small><?= e($user['email']) ?></small></span><form method="post" action="<?= e(url_for('/logout')) ?>"><?= csrf_field() ?><button class="btn btn-ghost">Çıkış</button></form></div></header>
+    <div class="main-shell"><header class="topbar"><button type="button" class="menu-button" data-menu aria-controls="sidebar" aria-expanded="false" aria-label="Menüyü aç">☰</button><div><p class="eyebrow"><?= e(role_label((string) $user['role'])) ?></p><h1><?= e($title) ?></h1></div><div class="user-box"><span><strong><?= e($user['name']) ?></strong><small><?= e($user['email']) ?></small></span><form method="post" action="<?= e(url_for('/logout')) ?>"><?= csrf_field() ?><button class="btn btn-ghost">Çıkış</button></form></div></header>
     <?php render_flash($flash); ?><main class="content"><?php render_route($user, $path); ?></main></div></div>
-    <script src="<?= e(asset_url('assets/js/app.js') . '?v=5') ?>"></script></body></html>
+    <script src="<?= e(asset_url('assets/js/app.js') . '?v=6') ?>"></script></body></html>
     <?php
 }
 
@@ -726,7 +726,7 @@ function render_flash(?array $flash): void
 
 function render_error(Throwable $e): void
 {
-    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css')) ?>"><title>FizyoRez Hata</title></head><body class="auth-page"><main class="auth-card wide"><div class="brand-mark">FR</div><h1>İşlem tamamlanamadı</h1><p><?= e(friendly_error_message($e)) ?></p><p class="muted">Kurulum ayrıntıları için <a href="<?= e(url_for('/health')) ?>">sistem kontrolünü</a> açabilirsiniz.</p><a class="btn btn-primary" href="<?= e(url_for('/login')) ?>">Girişe dön</a></main></body></html><?php
+    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=6') ?>"><title>FizyoRez Hata</title></head><body class="auth-page"><main class="auth-card wide"><div class="brand-mark">FR</div><h1>İşlem tamamlanamadı</h1><p><?= e(friendly_error_message($e)) ?></p><p class="muted">Kurulum ayrıntıları için <a href="<?= e(url_for('/health')) ?>">sistem kontrolünü</a> açabilirsiniz.</p><a class="btn btn-primary" href="<?= e(url_for('/login')) ?>">Girişe dön</a></main></body></html><?php
 }
 
 function customers(): array { return DB::fetchAll('SELECT id, name FROM users WHERE role = "customer" AND status = "active" ORDER BY name'); }
