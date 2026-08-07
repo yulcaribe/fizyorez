@@ -287,9 +287,6 @@ final class PaymentService
             throw new RuntimeException('Paket, danışan veya başlangıç tarihi geçersiz.');
         }
         $amount = self::validPurchaseAmount($package['price'] ?? 0);
-        if (WalletService::availableBalance($customerId) < $amount) {
-            throw new RuntimeException('Danışanın kullanılabilir bakiyesi bu paket için yetersiz.');
-        }
 
         $id = self::insertTransaction([
             'customer_id' => $customerId,
@@ -457,7 +454,11 @@ final class PaymentService
         $before = round((float) ($wallet['balance'] ?? 0), 2);
         $signedAmount = $transaction['direction'] === 'credit' ? (float) $transaction['amount'] : -(float) $transaction['amount'];
         $after = round($before + $signedAmount, 2);
-        if ($after < 0) {
+        $allowsDebt = $transaction['direction'] === 'debit'
+            && $transaction['transaction_type'] === 'package_purchase'
+            && $transaction['target_type'] === 'package_definition'
+            && $transaction['source'] === 'staff';
+        if ($after < 0 && !$allowsDebt) {
             throw new RuntimeException('Onay sırasında kullanılabilir bakiye yetersiz kaldı. Önce başka bekleyen hareketleri kontrol edin.');
         }
         DB::execute('UPDATE customer_wallets SET balance = ?, updated_at = NOW() WHERE customer_id = ?', [$after, $customerId]);

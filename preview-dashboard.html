@@ -3,58 +3,57 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>FizyoRez Genel Bakış Önizleme</title>
-    <link rel="stylesheet" href="/assets/css/app.css?v=7">
+    <title>FizyoRez Bakiye Önizleme</title>
+    <link rel="stylesheet" href="/assets/css/app.css?v=8">
 </head>
 <body>
 <div class="app-shell">
     <aside class="sidebar" id="sidebar">
         <a href="#" class="brand"><span class="brand-mark">FR</span><span><strong>FizyoRez</strong><small>Beta</small></span></a>
-        <nav class="nav"><a class="active" href="#">Genel Bakış</a><a href="#">Rezervasyonlar</a><a href="#">Ödemeler ve Bakiye</a><a href="#">Danışanlar</a></nav>
+        <nav class="nav"><a href="#">Genel Bakış</a><a href="#">Randevularım</a><a class="active" href="#">Ödemeler ve Bakiye</a><a href="#">Paketlerim</a></nav>
     </aside>
     <div class="main-shell">
         <header class="topbar">
             <button type="button" class="menu-button" data-menu aria-controls="sidebar" aria-expanded="false" aria-label="Menüyü aç">☰</button>
-            <div><p class="eyebrow">Yönetici</p><h1>Genel Bakış</h1></div>
-            <div class="user-box"><span><strong>Test Yönetici</strong><small>test@example.com</small></span><button class="btn btn-ghost">Çıkış</button></div>
+            <div><p class="eyebrow">Danışan</p><h1>Ödemeler ve Bakiye</h1></div>
+            <div class="user-box"><span><strong>Ayşe Yılmaz</strong><small>ayse@example.com</small></span><button class="btn btn-ghost">Çıkış</button></div>
         </header>
         <main class="content">
-            <section class="grid dashboard-metrics">
-                <a class="metric" href="#"><span>Bugün aktif</span><strong>8</strong></a>
-                <a class="metric" href="#"><span>Yaklaşan</span><strong>24</strong></a>
-                <a class="metric" href="#"><span>30 gün tamamlanan</span><strong>61</strong></a>
-                <a class="metric" href="#"><span>30 gün iptal</span><strong>5</strong></a>
-                <a class="metric" href="#"><span>30 gün gelmedi</span><strong>3</strong></a>
-                <a class="metric" href="#"><span>Aktif ödenmemiş</span><strong>7</strong></a>
-                <a class="metric accent" href="#"><span>30 gün net hareket</span><strong>18.450,00 TRY</strong></a>
+            <section class="wallet-hero financial-wallet has-debt">
+                <div><p class="eyebrow">Borç bakiyesi</p><h2>-1.250,00 TRY</h2><p>Yönetim tarafından tanımlanan paketlerden kalan ödenmemiş bakiye.</p></div>
+                <div class="wallet-breakdown"><span><small>Hesap bakiyesi</small><strong>-1.250,00 TRY</strong></span><span><small>Onayda rezerve</small><strong>0,00 TRY</strong></span></div>
             </section>
-            <section class="panel reservation-filter-panel">
-                <div class="section-heading"><div><p class="eyebrow">Liste görünümü</p><h2>Rezervasyon filtreleri</h2></div></div>
-                <form class="form-grid reservation-filter">
-                    <label>Başlangıç tarihi<input type="date" value="2026-08-07"></label>
-                    <label>Bitiş tarihi<input type="date"></label>
-                    <label>Rezervasyon durumu<select><option>Aktif (bekleyen + onaylı)</option></select></label>
-                    <label>Ödeme durumu<select><option>Tüm ödeme durumları</option></select></label>
-                    <div class="filter-actions"><button type="button" class="btn btn-primary">Filtrele</button><button type="button" class="btn btn-ghost">Sıfırla</button></div>
+            <aside class="debt-notice" role="status"><strong>1.250,00 TRY ödenmemiş bakiye</strong><span>Yapacağınız bakiye yüklemeleri önce bu borcu kapatır.</span></aside>
+            <section class="grid two-col">
+                <form id="wallet-topup" class="panel card-payment form-grid single">
+                    <p class="eyebrow">Beta ödeme</p><h2>Kartla bakiye yükle</h2>
+                    <label>Kart üzerindeki ad<input name="cardholder" value="Ayşe Yılmaz"></label>
+                    <label>Kart numarası<input name="card_number" value="4242 4242 4242 4242" data-card-number></label>
+                    <div class="form-grid compact"><label>Son kullanma<input value="12/30" data-card-expiry></label><label>CVV<input value="123"></label></div>
+                    <label>Yüklenecek tutar<input type="number" name="amount" min="1" step="0.01" value="1000"></label>
+                    <button type="button" class="btn btn-primary">Bakiye Yüklemeyi Onaya Gönder</button>
                 </form>
+                <section class="panel"><p class="eyebrow">Bakiye sistemi</p><h2>Nasıl çalışır?</h2><div class="flow-steps"><span><b>1</b>Kartla veya işletme üzerinden bakiye yükleyin.</span><span><b>2</b>Yetkili onayından sonra bakiye kullanılabilir olur.</span><span><b>3</b>Paket ya da tek seans seçin; tutar onay süresince rezerve edilir.</span></div></section>
             </section>
             <section class="panel">
-                <div class="section-heading"><div><p class="eyebrow">24 kayıt</p><h2>Filtrelenen rezervasyonlar</h2></div></div>
-                <div class="table-wrap">
-                    <table>
-                        <thead><tr><th>Tarih</th><th>Hizmet</th><th>Danışan</th><th>Fizyoterapist</th><th>Durum</th><th>Ödeme</th><th>İşlem</th></tr></thead>
-                        <tbody>
-                            <tr><td><strong>07-08-2026 10:00–11:00</strong><small>Paket</small></td><td>Manuel Terapi<small>60 dk</small></td><td>Ayşe Yılmaz</td><td>Fzt. Deniz Kaya</td><td><span class="badge confirmed">Onaylı</span></td><td><span class="badge paid">Ödendi</span></td><td class="actions"><button class="btn btn-small btn-danger">İptal</button><button class="btn btn-small btn-success">Tamamla</button></td></tr>
-                            <tr><td><strong>08-08-2026 13:30–14:15</strong><small>Tek seans</small></td><td>Egzersiz Danışmanlığı<small>45 dk</small></td><td>Mehmet Demir</td><td>Fzt. Selin Aras</td><td><span class="badge pending">Bekliyor</span></td><td><span class="badge pending">Ödenmedi</span></td><td class="actions"><button class="btn btn-small btn-danger">İptal</button><button class="btn btn-small">Taşı</button></td></tr>
-                            <tr><td><strong>09-08-2026 09:00–10:00</strong><small>Paket</small></td><td>Kontrol Seansı<small>60 dk</small></td><td>Zeynep Acar</td><td>Fzt. Deniz Kaya</td><td><span class="badge completed">Tamamlandı</span></td><td><span class="badge paid">Ödendi</span></td><td></td></tr>
-                        </tbody>
-                    </table>
+                <div class="section-heading"><div><p class="eyebrow">Paket ve haklar</p><h2>Bakiyeyle paket satın al</h2><p class="muted">Satın alma talebi onaylanınca haklarınız otomatik tanımlanır.</p></div></div>
+                <div class="purchase-grid">
+                    <article class="purchase-card"><div><h3>Omurga Sağlığı</h3><p>Kişiye özel fizyoterapi seans paketi</p><small>10 hak · 45 gün</small></div><footer><strong>2.500,00 TRY</strong><form data-wallet-purchase data-required-balance="2500" data-spendable-balance="-1250"><button class="btn btn-small btn-primary">Bakiyeyle Al</button></form></footer></article>
+                    <article class="purchase-card"><div><h3>Kontrol Paketi</h3><p>Düzenli takip ve egzersiz kontrolü</p><small>4 hak · 30 gün</small></div><footer><strong>900,00 TRY</strong><form data-wallet-purchase data-required-balance="900" data-spendable-balance="-1250"><button class="btn btn-small btn-primary">Bakiyeyle Al</button></form></footer></article>
                 </div>
             </section>
-            <nav class="pagination" aria-label="Rezervasyon sayfaları"><a class="btn btn-ghost is-disabled" href="#">Önceki</a><span>Sayfa 1 / 2</span><a class="btn btn-ghost" href="#">Sonraki</a></nav>
+            <section class="panel">
+                <div class="section-heading directory-heading"><div><p class="eyebrow">2 kayıt</p><h2>Danışanlar</h2></div></div>
+                <div class="user-directory has-wallet">
+                    <div class="user-table-head"><span>Ad soyad</span><span>İletişim</span><span>Rol</span><span>Bakiye</span><span>Durum</span><span></span></div>
+                    <div class="user-row is-static"><div class="user-row-summary"><span class="user-cell user-primary" data-label="Ad soyad"><strong>Ayşe Yılmaz</strong><small>Kullanıcı #24</small></span><span class="user-cell user-contact" data-label="İletişim"><strong>ayse@example.com</strong><small>0555 111 22 33</small></span><span class="user-cell" data-label="Rol"><span class="role-chip">Danışan</span></span><span class="user-cell wallet-cell" data-label="Bakiye"><strong class="wallet-amount is-negative">-1.250,00 TRY</strong><small>Borç bakiyesi</small></span><span class="user-cell" data-label="Durum"><span class="badge active">Aktif</span></span><span class="user-row-action"></span></div></div>
+                    <div class="user-row is-static"><div class="user-row-summary"><span class="user-cell user-primary" data-label="Ad soyad"><strong>Mehmet Demir</strong><small>Kullanıcı #31</small></span><span class="user-cell user-contact" data-label="İletişim"><strong>mehmet@example.com</strong><small>0555 444 55 66</small></span><span class="user-cell" data-label="Rol"><span class="role-chip">Danışan</span></span><span class="user-cell wallet-cell" data-label="Bakiye"><strong>850,00 TRY</strong><small>Kullanılabilir bakiye</small></span><span class="user-cell" data-label="Durum"><span class="badge active">Aktif</span></span><span class="user-row-action"></span></div></div>
+                </div>
+            </section>
+            <dialog class="feedback-dialog" data-balance-dialog aria-labelledby="balance-dialog-title"><form method="dialog"><div><p class="eyebrow">Bakiye işlemi</p><h2 id="balance-dialog-title">Yetersiz bakiye</h2><p class="muted" data-balance-message></p></div><div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Kapat</button><button type="button" class="btn btn-primary" data-balance-topup>Bakiye Yükle</button></div></form></dialog>
         </main>
     </div>
 </div>
-<script src="/assets/js/app.js?v=6"></script>
+<script src="/assets/js/app.js?v=7"></script>
 </body>
 </html>

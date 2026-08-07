@@ -64,6 +64,47 @@ document.querySelectorAll('[data-card-expiry]').forEach((input) => {
     });
 });
 
+const balanceDialog = document.querySelector('[data-balance-dialog]');
+const balanceMessage = balanceDialog?.querySelector('[data-balance-message]');
+const balanceTopupButton = balanceDialog?.querySelector('[data-balance-topup]');
+const walletTopupForm = document.querySelector('#wallet-topup');
+const walletTopupAmount = walletTopupForm?.querySelector('[name="amount"]');
+const formatMoney = (value) => new Intl.NumberFormat('tr-TR', {
+    style: 'currency',
+    currency: 'TRY',
+}).format(value);
+
+document.querySelectorAll('[data-wallet-purchase]').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+        const requiredBalance = Number(form.dataset.requiredBalance);
+        const spendableBalance = Number(form.dataset.spendableBalance);
+        if (!Number.isFinite(requiredBalance) || !Number.isFinite(spendableBalance) || spendableBalance >= requiredBalance) return;
+
+        event.preventDefault();
+        const shortage = Math.ceil((requiredBalance - spendableBalance) * 100) / 100;
+        if (balanceMessage) {
+            balanceMessage.textContent = `Net harcanabilir bakiyeniz ${formatMoney(spendableBalance)}. Bu işlem için ${formatMoney(shortage)} daha yüklemeniz gerekiyor.`;
+        }
+        if (balanceDialog) balanceDialog.dataset.shortage = String(shortage);
+
+        if (balanceDialog?.showModal) {
+            if (!balanceDialog.open) balanceDialog.showModal();
+        } else {
+            window.alert(balanceMessage?.textContent || 'Bakiyeniz bu işlem için yetersiz.');
+        }
+    });
+});
+
+balanceTopupButton?.addEventListener('click', () => {
+    const shortage = Number(balanceDialog?.dataset.shortage);
+    if (walletTopupAmount && Number.isFinite(shortage) && shortage > 0) {
+        walletTopupAmount.value = shortage.toFixed(2);
+    }
+    balanceDialog?.close();
+    walletTopupForm?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    walletTopupAmount?.focus({ preventScroll: true });
+});
+
 document.querySelectorAll('[data-book-consultant]').forEach((button) => {
     button.addEventListener('click', () => {
         const form = document.querySelector('[data-reservation-form]');

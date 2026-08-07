@@ -28,7 +28,12 @@ final class WalletService
 
     public static function availableBalance(int $customerId): float
     {
-        return max(0, round(self::balance($customerId) - self::reservedBalance($customerId), 2));
+        return max(0, self::spendableBalance($customerId));
+    }
+
+    public static function spendableBalance(int $customerId): float
+    {
+        return round(self::balance($customerId) - self::reservedBalance($customerId), 2);
     }
 
     public static function balancesForCustomers(): array
@@ -37,6 +42,7 @@ final class WalletService
             'SELECT u.id, u.name,
                     COALESCE(w.balance, 0) AS wallet_balance,
                     COALESCE(pending.reserved_balance, 0) AS reserved_balance,
+                    COALESCE(w.balance, 0) - COALESCE(pending.reserved_balance, 0) AS spendable_balance,
                     GREATEST(COALESCE(w.balance, 0) - COALESCE(pending.reserved_balance, 0), 0) AS available_balance
              FROM users u
              LEFT JOIN customer_wallets w ON w.customer_id = u.id
