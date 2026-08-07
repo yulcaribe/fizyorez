@@ -216,21 +216,24 @@ final class Management
             $params[] = $user['id'];
         }
 
-        $today = DB::fetch('SELECT COUNT(*) AS total FROM reservations WHERE DATE(starts_at) = CURDATE()' . $consultantFilter, $params);
+        $today = DB::fetch('SELECT COUNT(*) AS total FROM reservations WHERE DATE(starts_at) = CURDATE() AND status IN ("pending", "confirmed")' . $consultantFilter, $params);
         $upcoming = DB::fetch('SELECT COUNT(*) AS total FROM reservations WHERE starts_at >= NOW() AND status IN ("pending", "confirmed")' . $consultantFilter, $params);
         $completed = DB::fetch('SELECT COUNT(*) AS total FROM reservations WHERE status = "completed" AND starts_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)' . $consultantFilter, $params);
+        $cancelled = DB::fetch('SELECT COUNT(*) AS total FROM reservations WHERE status = "cancelled" AND starts_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)' . $consultantFilter, $params);
         $noShow = DB::fetch('SELECT COUNT(*) AS total FROM reservations WHERE status = "no_show" AND starts_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)' . $consultantFilter, $params);
-        $revenue = can($user, 'payments.view_all')
+        $unpaid = DB::fetch('SELECT COUNT(*) AS total FROM reservations WHERE status IN ("pending", "confirmed") AND payment_status = "pending"' . $consultantFilter, $params);
+        $netMovement = can($user, 'payments.view_all')
             ? DB::fetch(
                 'SELECT COALESCE(SUM(
                     CASE
-                        WHEN transaction_type = "topup" AND direction = "credit" THEN amount
-                        WHEN transaction_type = "refund" AND direction = "debit" THEN -amount
-                        ELSE 0
+                        WHEN direction = "credit" THEN amount
+                        ELSE -amount
                     END
                  ), 0) AS total
                  FROM financial_transactions
-                 WHERE status = "approved" AND reviewed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)'
+                 WHERE wallet_applied = 1
+                   AND status IN ("approved", "refunded")
+                   AND reviewed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)'
             )
             : ['total' => 0];
 
@@ -238,8 +241,10 @@ final class Management
             'today_reservations' => (int) ($today['total'] ?? 0),
             'upcoming_reservations' => (int) ($upcoming['total'] ?? 0),
             'completed_last_30_days' => (int) ($completed['total'] ?? 0),
+            'cancelled_last_30_days' => (int) ($cancelled['total'] ?? 0),
             'no_show_last_30_days' => (int) ($noShow['total'] ?? 0),
-            'revenue_last_30_days' => (float) ($revenue['total'] ?? 0),
+            'unpaid_reservations' => (int) ($unpaid['total'] ?? 0),
+            'net_wallet_movement_last_30_days' => (float) ($netMovement['total'] ?? 0),
         ];
     }
 }

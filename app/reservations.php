@@ -5,8 +5,45 @@ declare(strict_types=1);
 final class ReservationService
 {
     private const ACTIVE_STATUSES = ['pending', 'confirmed'];
+    private const LIST_STATUSES = ['pending', 'confirmed', 'cancelled', 'completed', 'no_show'];
+    private const PAYMENT_STATUSES = ['paid', 'pending', 'awaiting_approval', 'cancelled', 'refunded'];
 
     public static function list(array $actor, array $filters = []): array
+    {
+        [$where, $params] = self::listConditions($actor, $filters);
+        $limit = max(1, min(300, (int) ($filters['limit'] ?? 300)));
+        $offset = max(0, (int) ($filters['offset'] ?? 0));
+
+        $order = !empty($filters['from']) ? 'ASC' : 'DESC';
+        return DB::fetchAll(
+            'SELECT r.*, s.name AS service_name, s.type AS service_type, s.duration_minutes,
+                    c.name AS customer_name, c.email AS customer_email,
+                    k.name AS consultant_name, k.email AS consultant_email,
+                    cr.id AS pending_change_id, cr.requested_starts_at AS pending_requested_starts_at
+             FROM reservations r
+             INNER JOIN services s ON s.id = r.service_id
+             INNER JOIN users c ON c.id = r.customer_id
+             INNER JOIN users k ON k.id = r.consultant_id
+              LEFT JOIN reservation_change_requests cr ON cr.reservation_id = r.id AND cr.status = "pending"
+              WHERE ' . implode(' AND ', $where) . '
+              ORDER BY r.starts_at ' . $order . '
+              LIMIT ' . $limit . ' OFFSET ' . $offset,
+            $params
+        );
+    }
+
+    public static function count(array $actor, array $filters = []): int
+    {
+        [$where, $params] = self::listConditions($actor, $filters);
+        $row = DB::fetch(
+            'SELECT COUNT(*) AS total FROM reservations r WHERE ' . implode(' AND ', $where),
+            $params
+        );
+
+        return (int) ($row['total'] ?? 0);
+    }
+
+    private static function listConditions(array $actor, array $filters): array
     {
         $where = ['1=1'];
         $params = [];
@@ -21,9 +58,26 @@ final class ReservationService
             Authorization::require($actor, 'reservations.view_all');
         }
 
-        if (!empty($filters['status'])) {
+        $status = trim((string) ($filters['status'] ?? ''));
+        if ($status === 'active') {
+            $where[] = 'r.status IN ("pending", "confirmed")';
+        } elseif ($status !== '') {
+            if (!in_array($status, self::LIST_STATUSES, true)) {
+                throw new RuntimeException('Rezervasyon durum filtresi geçersiz.');
+            }
             $where[] = 'r.status = ?';
-            $params[] = $filters['status'];
+            $params[] = $status;
+        }
+
+        $paymentStatus = trim((string) ($filters['payment_status'] ?? ''));
+        if ($paymentStatus === 'unpaid') {
+            $where[] = 'r.payment_status = "pending"';
+        } elseif ($paymentStatus !== '') {
+            if (!in_array($paymentStatus, self::PAYMENT_STATUSES, true)) {
+                throw new RuntimeException('Ödeme durum filtresi geçersiz.');
+            }
+            $where[] = 'r.payment_status = ?';
+            $params[] = $paymentStatus;
         }
 
         if (!empty($filters['from'])) {
@@ -36,22 +90,7 @@ final class ReservationService
             $params[] = $filters['to'];
         }
 
-        $order = !empty($filters['from']) ? 'ASC' : 'DESC';
-        return DB::fetchAll(
-            'SELECT r.*, s.name AS service_name, s.type AS service_type, s.duration_minutes,
-                    c.name AS customer_name, c.email AS customer_email,
-                    k.name AS consultant_name, k.email AS consultant_email,
-                    cr.id AS pending_change_id, cr.requested_starts_at AS pending_requested_starts_at
-             FROM reservations r
-             INNER JOIN services s ON s.id = r.service_id
-             INNER JOIN users c ON c.id = r.customer_id
-             INNER JOIN users k ON k.id = r.consultant_id
-             LEFT JOIN reservation_change_requests cr ON cr.reservation_id = r.id AND cr.status = "pending"
-             WHERE ' . implode(' AND ', $where) . '
-             ORDER BY r.starts_at ' . $order . '
-             LIMIT 300',
-            $params
-        );
+        return [$where, $params];
     }
 
     public static function create(array $actor, array $data): array

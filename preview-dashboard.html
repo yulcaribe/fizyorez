@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="tr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FizyoRez Genel Bakış Önizleme</title>
+    <link rel="stylesheet" href="/assets/css/app.css?v=7">
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+        <a href="#" class="brand"><span class="brand-mark">FR</span><span><strong>FizyoRez</strong><small>Beta</small></span></a>
+        <nav class="nav"><a class="active" href="#">Genel Bakış</a><a href="#">Rezervasyonlar</a><a href="#">Ödemeler ve Bakiye</a><a href="#">Danışanlar</a></nav>
+    </aside>
+    <div class="main-shell">
+        <header class="topbar">
+            <button type="button" class="menu-button" data-menu aria-controls="sidebar" aria-expanded="false" aria-label="Menüyü aç">☰</button>
+            <div><p class="eyebrow">Yönetici</p><h1>Genel Bakış</h1></div>
+            <div class="user-box"><span><strong>Test Yönetici</strong><small>test@example.com</small></span><button class="btn btn-ghost">Çıkış</button></div>
+        </header>
+        <main class="content">
+            <section class="grid dashboard-metrics">
+                <a class="metric" href="#"><span>Bugün aktif</span><strong>8</strong></a>
+                <a class="metric" href="#"><span>Yaklaşan</span><strong>24</strong></a>
+                <a class="metric" href="#"><span>30 gün tamamlanan</span><strong>61</strong></a>
+                <a class="metric" href="#"><span>30 gün iptal</span><strong>5</strong></a>
+                <a class="metric" href="#"><span>30 gün gelmedi</span><strong>3</strong></a>
+                <a class="metric" href="#"><span>Aktif ödenmemiş</span><strong>7</strong></a>
+                <a class="metric accent" href="#"><span>30 gün net hareket</span><strong>18.450,00 TRY</strong></a>
+            </section>
+            <section class="panel reservation-filter-panel">
+                <div class="section-heading"><div><p class="eyebrow">Liste görünümü</p><h2>Rezervasyon filtreleri</h2></div></div>
+                <form class="form-grid reservation-filter">
+                    <label>Başlangıç tarihi<input type="date" value="2026-08-07"></label>
+                    <label>Bitiş tarihi<input type="date"></label>
+                    <label>Rezervasyon durumu<select><option>Aktif (bekleyen + onaylı)</option></select></label>
+                    <label>Ödeme durumu<select><option>Tüm ödeme durumları</option></select></label>
+                    <div class="filter-actions"><button type="button" class="btn btn-primary">Filtrele</button><button type="button" class="btn btn-ghost">Sıfırla</button></div>
+                </form>
+            </section>
+            <section class="panel">
+                <div class="section-heading"><div><p class="eyebrow">24 kayıt</p><h2>Filtrelenen rezervasyonlar</h2></div></div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Tarih</th><th>Hizmet</th><th>Danışan</th><th>Fizyoterapist</th><th>Durum</th><th>Ödeme</th><th>İşlem</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>07-08-2026 10:00–11:00</strong><small>Paket</small></td><td>Manuel Terapi<small>60 dk</small></td><td>Ayşe Yılmaz</td><td>Fzt. Deniz Kaya</td><td><span class="badge confirmed">Onaylı</span></td><td><span class="badge paid">Ödendi</span></td><td class="actions"><button class="btn btn-small btn-danger">İptal</button><button class="btn btn-small btn-success">Tamamla</button></td></tr>
+                            <tr><td><strong>08-08-2026 13:30–14:15</strong><small>Tek seans</small></td><td>Egzersiz Danışmanlığı<small>45 dk</small></td><td>Mehmet Demir</td><td>Fzt. Selin Aras</td><td><span class="badge pending">Bekliyor</span></td><td><span class="badge pending">Ödenmedi</span></td><td class="actions"><button class="btn btn-small btn-danger">İptal</button><button class="btn btn-small">Taşı</button></td></tr>
+                            <tr><td><strong>09-08-2026 09:00–10:00</strong><small>Paket</small></td><td>Kontrol Seansı<small>60 dk</small></td><td>Zeynep Acar</td><td>Fzt. Deniz Kaya</td><td><span class="badge completed">Tamamlandı</span></td><td><span class="badge paid">Ödendi</span></td><td></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            <nav class="pagination" aria-label="Rezervasyon sayfaları"><a class="btn btn-ghost is-disabled" href="#">Önceki</a><span>Sayfa 1 / 2</span><a class="btn btn-ghost" href="#">Sonraki</a></nav>
+        </main>
+    </div>
+</div>
+<script src="/assets/js/app.js?v=6"></script>
+</body>
+</html>

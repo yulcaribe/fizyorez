@@ -129,6 +129,11 @@ function handle_web_action(array $user, string $path): never
         $query = http_build_query(array_filter(['status' => $returnStatus, 'view' => $returnView], static fn (string $value): bool => $value !== ''));
         redirect_to($path . ($query !== '' ? '?' . $query : ''));
     }
+    if (in_array($path, ['/admin', '/admin/reservations'], true) && $_GET !== []) {
+        $defaults = $path === '/admin' ? ['from' => date('Y-m-d'), 'status' => 'active'] : [];
+        $filters = reservation_filter_state($defaults);
+        redirect_to(reservation_filter_url($path, $filters, $filters['page']));
+    }
     redirect_to($path);
 }
 
@@ -170,7 +175,7 @@ function render_health(): void
     $allOk = !in_array(false, array_column($checks, 'ok'), true);
     ?>
     <!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Kurulum Kontrolü · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=6') ?>"></head>
+    <title>Kurulum Kontrolü · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=7') ?>"></head>
     <body class="auth-page"><main class="auth-card wide"><div class="brand-mark">FR</div><h1>Kurulum kontrolü</h1>
     <p class="muted"><?= $allOk ? 'Sistem çalışmaya hazır.' : 'Aşağıdaki eksikleri giderip tekrar deneyin.' ?></p>
     <div class="table-wrap"><table><thead><tr><th>Kontrol</th><th>Durum</th><th>Detay</th></tr></thead><tbody>
@@ -212,7 +217,7 @@ function render_register(?array $flash): void
 
 function render_auth_start(string $title): void
 {
-    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=6') ?>"></head><body class="auth-page"><?php
+    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=7') ?>"></head><body class="auth-page"><?php
 }
 
 function render_page(array $user, string $path, ?array $flash): void
@@ -221,7 +226,7 @@ function render_page(array $user, string $path, ?array $flash): void
     $title = page_title($path);
     ?>
     <!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=6') ?>"></head><body>
+    <title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=7') ?>"></head><body>
     <div class="app-shell"><aside class="sidebar" id="sidebar"><a href="<?= e(url_for(role_home((string) $user['role']))) ?>" class="brand"><span class="brand-mark">FR</span><span><strong><?= e(config('app.name')) ?></strong><small>Beta</small></span></a><nav class="nav"><?= nav_links($user, $path) ?></nav></aside>
     <div class="main-shell"><header class="topbar"><button type="button" class="menu-button" data-menu aria-controls="sidebar" aria-expanded="false" aria-label="Menüyü aç">☰</button><div><p class="eyebrow"><?= e(role_label((string) $user['role'])) ?></p><h1><?= e($title) ?></h1></div><div class="user-box"><span><strong><?= e($user['name']) ?></strong><small><?= e($user['email']) ?></small></span><form method="post" action="<?= e(url_for('/logout')) ?>"><?= csrf_field() ?><button class="btn btn-ghost">Çıkış</button></form></div></header>
     <?php render_flash($flash); ?><main class="content"><?php render_route($user, $path); ?></main></div></div>
@@ -318,16 +323,176 @@ function render_dashboard(array $user): void
 {
     if ($user['role'] === 'customer') {
         $packages = DB::fetchAll(Management::customerPackageSql() . ' WHERE cp.customer_id = ? ORDER BY cp.expires_at ASC', [$user['id']]);
-        $upcoming = ReservationService::list($user, ['from' => date('Y-m-d H:i:s')]);
+        $upcoming = ReservationService::list($user, ['from' => date('Y-m-d H:i:s'), 'status' => 'active']);
         $walletBalance = WalletService::availableBalance((int) $user['id']);
         ?><section class="welcome-card"><div><p class="eyebrow">Hoş geldiniz</p><h2><?= e($user['name']) ?></h2><p>Randevularınızı, paket haklarınızı ve ödeme durumunuzu buradan takip edebilirsiniz.</p></div><a class="btn btn-light" href="<?= e(url_for('/customer/book')) ?>">Yeni Randevu</a></section>
         <section class="grid cards-4"><div class="metric"><span>Aktif paket</span><strong><?= count(array_filter($packages, fn ($p) => $p['status'] === 'active')) ?></strong></div><div class="metric"><span>Kalan hak</span><strong><?= array_sum(array_map(fn ($p) => (int) $p['credits_remaining'], $packages)) ?></strong></div><div class="metric"><span>Yaklaşan randevu</span><strong><?= count($upcoming) ?></strong></div><div class="metric accent"><span>Kullanılabilir bakiye</span><strong><?= money($walletBalance) ?></strong></div></section><?php
         render_reservation_table($user, array_slice($upcoming, 0, 8));
         return;
     }
+
     $summary = Management::reportSummary($user);
-    ?><section class="grid cards-5"><div class="metric"><span>Bugün</span><strong><?= e($summary['today_reservations']) ?></strong></div><div class="metric"><span>Yaklaşan</span><strong><?= e($summary['upcoming_reservations']) ?></strong></div><div class="metric"><span>30 gün tamamlanan</span><strong><?= e($summary['completed_last_30_days']) ?></strong></div><div class="metric"><span>Gelmedi</span><strong><?= e($summary['no_show_last_30_days']) ?></strong></div><?php if (can($user, 'payments.view_all')): ?><div class="metric accent"><span>30 gün tahsilat</span><strong><?= money($summary['revenue_last_30_days']) ?></strong></div><?php endif; ?></section><?php
-    render_reservation_table($user, ReservationService::list($user, ['from' => date('Y-m-d 00:00:00'), 'to' => date('Y-m-d 23:59:59')]));
+    render_admin_dashboard_metrics($user, $summary);
+
+    $filters = reservation_filter_state([
+        'from' => date('Y-m-d'),
+        'status' => 'active',
+    ]);
+    [$reservations, $total, $totalPages] = filtered_reservations($user, $filters);
+    render_reservation_filters($filters, '/admin');
+    render_reservation_table($user, $reservations, 'Filtrelenen rezervasyonlar', $total);
+    render_reservation_pagination($filters, '/admin', $totalPages);
+}
+
+function render_admin_dashboard_metrics(array $user, array $summary): void
+{
+    $today = date('Y-m-d');
+    $last30 = date('Y-m-d', strtotime('-30 days'));
+    $metricUrl = static function (array $query): string {
+        return url_for('/admin') . '?' . http_build_query($query);
+    };
+    ?>
+    <section class="grid dashboard-metrics">
+        <a class="metric" href="<?= e($metricUrl(['from' => $today, 'to' => $today, 'status' => 'active'])) ?>"><span>Bugün aktif</span><strong><?= e($summary['today_reservations']) ?></strong></a>
+        <a class="metric" href="<?= e($metricUrl(['from' => $today, 'to' => '', 'status' => 'active'])) ?>"><span>Yaklaşan</span><strong><?= e($summary['upcoming_reservations']) ?></strong></a>
+        <a class="metric" href="<?= e($metricUrl(['from' => $last30, 'to' => $today, 'status' => 'completed'])) ?>"><span>30 gün tamamlanan</span><strong><?= e($summary['completed_last_30_days']) ?></strong></a>
+        <a class="metric" href="<?= e($metricUrl(['from' => $last30, 'to' => $today, 'status' => 'cancelled'])) ?>"><span>30 gün iptal</span><strong><?= e($summary['cancelled_last_30_days']) ?></strong></a>
+        <a class="metric" href="<?= e($metricUrl(['from' => $last30, 'to' => $today, 'status' => 'no_show'])) ?>"><span>30 gün gelmedi</span><strong><?= e($summary['no_show_last_30_days']) ?></strong></a>
+        <a class="metric" href="<?= e($metricUrl(['from' => '', 'to' => '', 'status' => 'active', 'payment_status' => 'unpaid'])) ?>"><span>Aktif ödenmemiş</span><strong><?= e($summary['unpaid_reservations']) ?></strong></a>
+        <?php if (can($user, 'payments.view_all')): ?><a class="metric accent" href="<?= e(url_for('/admin/payments')) ?>"><span>30 gün net hareket</span><strong><?= money($summary['net_wallet_movement_last_30_days']) ?></strong></a><?php endif; ?>
+    </section>
+    <?php
+}
+
+function reservation_filter_state(array $defaults = []): array
+{
+    $statusOptions = reservation_status_filter_options();
+    $paymentOptions = reservation_payment_filter_options();
+    $from = normalize_filter_date(array_key_exists('from', $_GET) ? (string) $_GET['from'] : (string) ($defaults['from'] ?? ''));
+    $to = normalize_filter_date(array_key_exists('to', $_GET) ? (string) $_GET['to'] : (string) ($defaults['to'] ?? ''));
+    if ($from !== '' && $to !== '' && $from > $to) {
+        [$from, $to] = [$to, $from];
+    }
+
+    $defaultStatus = (string) ($defaults['status'] ?? '');
+    $status = array_key_exists('status', $_GET) ? trim((string) $_GET['status']) : $defaultStatus;
+    if (!array_key_exists($status, $statusOptions)) {
+        $status = array_key_exists($defaultStatus, $statusOptions) ? $defaultStatus : '';
+    }
+
+    $defaultPayment = (string) ($defaults['payment_status'] ?? '');
+    $paymentStatus = array_key_exists('payment_status', $_GET) ? trim((string) $_GET['payment_status']) : $defaultPayment;
+    if (!array_key_exists($paymentStatus, $paymentOptions)) {
+        $paymentStatus = array_key_exists($defaultPayment, $paymentOptions) ? $defaultPayment : '';
+    }
+
+    return [
+        'from' => $from,
+        'to' => $to,
+        'status' => $status,
+        'payment_status' => $paymentStatus,
+        'page' => max(1, (int) ($_GET['page'] ?? 1)),
+        'per_page' => 20,
+    ];
+}
+
+function filtered_reservations(array $user, array &$state): array
+{
+    $serviceFilters = reservation_service_filters($state);
+    $total = ReservationService::count($user, $serviceFilters);
+    $totalPages = max(1, (int) ceil($total / $state['per_page']));
+    $state['page'] = min($state['page'], $totalPages);
+    $serviceFilters['limit'] = $state['per_page'];
+    $serviceFilters['offset'] = ($state['page'] - 1) * $state['per_page'];
+
+    return [ReservationService::list($user, $serviceFilters), $total, $totalPages];
+}
+
+function reservation_service_filters(array $state): array
+{
+    return array_filter([
+        'from' => $state['from'] === '' ? '' : $state['from'] . ' 00:00:00',
+        'to' => $state['to'] === '' ? '' : $state['to'] . ' 23:59:59',
+        'status' => $state['status'],
+        'payment_status' => $state['payment_status'],
+    ], static fn (string $value): bool => $value !== '');
+}
+
+function render_reservation_filters(array $state, string $action): void
+{
+    ?>
+    <section class="panel reservation-filter-panel">
+        <div class="section-heading"><div><p class="eyebrow">Liste görünümü</p><h2>Rezervasyon filtreleri</h2></div></div>
+        <form method="get" action="<?= e(url_for($action)) ?>" class="form-grid reservation-filter">
+            <label>Başlangıç tarihi<input type="date" name="from" value="<?= e($state['from']) ?>"></label>
+            <label>Bitiş tarihi<input type="date" name="to" value="<?= e($state['to']) ?>"></label>
+            <label>Rezervasyon durumu<select name="status"><?php foreach (reservation_status_filter_options() as $value => $label): ?><option value="<?= e($value) ?>" <?= selected($state['status'], $value) ?>><?= e($label) ?></option><?php endforeach; ?></select></label>
+            <label>Ödeme durumu<select name="payment_status"><?php foreach (reservation_payment_filter_options() as $value => $label): ?><option value="<?= e($value) ?>" <?= selected($state['payment_status'], $value) ?>><?= e($label) ?></option><?php endforeach; ?></select></label>
+            <div class="filter-actions"><button class="btn btn-primary">Filtrele</button><a class="btn btn-ghost" href="<?= e(url_for($action)) ?>">Sıfırla</a></div>
+        </form>
+    </section>
+    <?php
+}
+
+function render_reservation_pagination(array $state, string $action, int $totalPages): void
+{
+    if ($totalPages <= 1) return;
+    $previous = max(1, $state['page'] - 1);
+    $next = min($totalPages, $state['page'] + 1);
+    ?>
+    <nav class="pagination" aria-label="Rezervasyon sayfaları">
+        <a class="btn btn-ghost <?= $state['page'] <= 1 ? 'is-disabled' : '' ?>" href="<?= e(reservation_filter_url($action, $state, $previous)) ?>" <?= $state['page'] <= 1 ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Önceki</a>
+        <span>Sayfa <?= e($state['page']) ?> / <?= e($totalPages) ?></span>
+        <a class="btn btn-ghost <?= $state['page'] >= $totalPages ? 'is-disabled' : '' ?>" href="<?= e(reservation_filter_url($action, $state, $next)) ?>" <?= $state['page'] >= $totalPages ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Sonraki</a>
+    </nav>
+    <?php
+}
+
+function reservation_filter_url(string $action, array $state, int $page): string
+{
+    $query = [
+        'from' => $state['from'],
+        'to' => $state['to'],
+        'status' => $state['status'],
+        'payment_status' => $state['payment_status'],
+    ];
+    if ($page > 1) $query['page'] = $page;
+
+    return url_for($action) . '?' . http_build_query($query);
+}
+
+function reservation_status_filter_options(): array
+{
+    return [
+        '' => 'Tüm durumlar',
+        'active' => 'Aktif (bekleyen + onaylı)',
+        'pending' => 'Bekliyor',
+        'confirmed' => 'Onaylı',
+        'completed' => 'Tamamlandı',
+        'no_show' => 'Gelmedi',
+        'cancelled' => 'İptal',
+    ];
+}
+
+function reservation_payment_filter_options(): array
+{
+    return [
+        '' => 'Tüm ödeme durumları',
+        'unpaid' => 'Ödenmedi',
+        'awaiting_approval' => 'Onay bekliyor',
+        'paid' => 'Ödendi',
+        'refunded' => 'İade edildi',
+        'cancelled' => 'İptal',
+    ];
+}
+
+function normalize_filter_date(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') return '';
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+
+    return $date && $date->format('Y-m-d') === $value ? $value : '';
 }
 
 function render_users(array $actor, bool $customersOnly): void
@@ -398,10 +563,20 @@ function render_packages(array $actor): void
 
 function render_reservations(array $user, string $path): void
 {
-    $filters = $path === '/customer/book' ? ['from' => date('Y-m-d H:i:s')] : [];
+    if ($path === '/admin/reservations') {
+        $filters = reservation_filter_state();
+        [$reservations, $total, $totalPages] = filtered_reservations($user, $filters);
+        if (can($user, 'reservations.reschedule_approve')) render_change_request_queue($user);
+        ?><section class="panel"><div class="section-heading"><div><p class="eyebrow">Birebir ve grup seansları</p><h2>Yeni rezervasyon</h2></div></div><?php render_reservation_form($user); ?></section><?php
+        render_reservation_filters($filters, '/admin/reservations');
+        render_reservation_table($user, $reservations, 'Tüm rezervasyonlar', $total);
+        render_reservation_pagination($filters, '/admin/reservations', $totalPages);
+        return;
+    }
+
+    $filters = $path === '/customer/book' ? ['from' => date('Y-m-d H:i:s'), 'status' => 'active'] : [];
     $reservations = ReservationService::list($user, $filters);
     if ($user['role'] === 'customer') $reservations = array_slice($reservations, 0, 10);
-    if ($path === '/admin/reservations' && can($user, 'reservations.reschedule_approve')) render_change_request_queue($user);
     if ($path === '/customer/book') render_booking_matrix();
     if ($path !== '/customer/reservations'): ?><section class="panel"><div class="section-heading"><div><p class="eyebrow">Birebir ve grup seansları</p><h2>Yeni rezervasyon</h2></div></div><?php render_reservation_form($user); ?></section><?php endif;
     render_reservation_table($user, $reservations);
@@ -430,13 +605,14 @@ function render_reservation_form(array $user): void
     <?php
 }
 
-function render_reservation_table(array $user, array $reservations): void
+function render_reservation_table(array $user, array $reservations, string $title = 'Rezervasyonlar', ?int $total = null): void
 {
     if ($user['role'] === 'customer') {
         render_customer_reservation_cards($user, array_slice($reservations, 0, 10));
         return;
     }
-    ?><section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($reservations) ?> kayıt</p><h2>Rezervasyonlar</h2></div></div><div class="table-wrap"><table><thead><tr><th>Tarih</th><th>Hizmet</th><th>Danışan</th><th>Fizyoterapist</th><th>Durum</th><th>Ödeme</th><th>İşlem</th></tr></thead><tbody>
+    $recordCount = $total ?? count($reservations);
+    ?><section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= e($recordCount) ?> kayıt</p><h2><?= e($title) ?></h2></div></div><div class="table-wrap"><table><thead><tr><th>Tarih</th><th>Hizmet</th><th>Danışan</th><th>Fizyoterapist</th><th>Durum</th><th>Ödeme</th><th>İşlem</th></tr></thead><tbody>
     <?php foreach ($reservations as $item): ?><tr><td><strong><?= e(reservation_range((string) $item['starts_at'], (string) $item['ends_at'])) ?></strong><small><?= e($item['reservation_type'] === 'single' ? 'Tek seans' : 'Paket') ?></small></td><td><?= e($item['service_name']) ?><small><?= e($item['duration_minutes']) ?> dk</small></td><td><?= e($item['customer_name']) ?></td><td><?= e($item['consultant_name']) ?></td><td><span class="badge <?= e($item['status']) ?>"><?= e(status_label((string) $item['status'])) ?></span></td><td><span class="badge <?= e($item['payment_status']) ?>"><?= e(payment_label((string) $item['payment_status'])) ?></span></td><td class="actions">
     <?php if (in_array($item['status'], ['pending', 'confirmed'], true)): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="cancel_reservation"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-danger">İptal</button></form><details class="action-pop"><summary class="btn btn-small">Taşı</summary><form method="post" class="popover" data-reservation-timing data-fixed-duration="<?= e($item['duration_minutes']) ?>"><?= csrf_field() ?><input type="hidden" name="action" value="reschedule_reservation"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><label>Yeni başlangıç<input type="datetime-local" name="starts_at" data-reservation-start required></label><label>Yeni bitiş<input type="text" data-reservation-end readonly></label><button class="btn btn-small">Kaydet</button></form></details><?php endif; ?>
     <?php if ((can($user, 'reservations.manage_all') || ($user['role'] === 'consultant' && can($user, 'reservations.manage_own'))) && in_array($item['status'], ['pending', 'confirmed'], true)): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="set_reservation_status"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><input type="hidden" name="status" value="completed"><button class="btn btn-small btn-success">Geldi</button></form><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="set_reservation_status"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><input type="hidden" name="status" value="no_show"><button class="btn btn-small">Gelmedi</button></form><?php endif; ?></td></tr><?php endforeach; ?>
@@ -679,7 +855,9 @@ function render_customer_programs(array $user): void
 
 function render_reports(array $user): void
 {
-    render_dashboard($user); $popular = DB::fetchAll('SELECT s.name, COUNT(*) AS total FROM reservations r INNER JOIN services s ON s.id = r.service_id GROUP BY s.id ORDER BY total DESC LIMIT 10'); render_simple_table($popular, ['name' => 'Hizmet', 'total' => 'Rezervasyon']);
+    render_admin_dashboard_metrics($user, Management::reportSummary($user));
+    $popular = DB::fetchAll('SELECT s.name, COUNT(*) AS total FROM reservations r INNER JOIN services s ON s.id = r.service_id GROUP BY s.id ORDER BY total DESC LIMIT 10');
+    render_simple_table($popular, ['name' => 'Hizmet', 'total' => 'Rezervasyon']);
 }
 
 function render_settings(): void
@@ -726,7 +904,7 @@ function render_flash(?array $flash): void
 
 function render_error(Throwable $e): void
 {
-    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=6') ?>"><title>FizyoRez Hata</title></head><body class="auth-page"><main class="auth-card wide"><div class="brand-mark">FR</div><h1>İşlem tamamlanamadı</h1><p><?= e(friendly_error_message($e)) ?></p><p class="muted">Kurulum ayrıntıları için <a href="<?= e(url_for('/health')) ?>">sistem kontrolünü</a> açabilirsiniz.</p><a class="btn btn-primary" href="<?= e(url_for('/login')) ?>">Girişe dön</a></main></body></html><?php
+    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css') . '?v=7') ?>"><title>FizyoRez Hata</title></head><body class="auth-page"><main class="auth-card wide"><div class="brand-mark">FR</div><h1>İşlem tamamlanamadı</h1><p><?= e(friendly_error_message($e)) ?></p><p class="muted">Kurulum ayrıntıları için <a href="<?= e(url_for('/health')) ?>">sistem kontrolünü</a> açabilirsiniz.</p><a class="btn btn-primary" href="<?= e(url_for('/login')) ?>">Girişe dön</a></main></body></html><?php
 }
 
 function customers(): array { return DB::fetchAll('SELECT id, name FROM users WHERE role = "customer" AND status = "active" ORDER BY name'); }
@@ -741,7 +919,7 @@ function reservation_range(string $startsAt, string $endsAt): string { try { $st
 function reservation_range_from_duration(string $startsAt, int $durationMinutes): string { try { $start = new DateTimeImmutable($startsAt); return reservation_range($start->format('Y-m-d H:i:s'), $start->modify('+' . max(0, $durationMinutes) . ' minutes')->format('Y-m-d H:i:s')); } catch (Throwable) { return $startsAt; } }
 function display_value(mixed $value): mixed { if (!is_string($value)) return $value; if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) return date_only($value); if (preg_match('/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/', $value)) return dt($value); return $value; }
 function money(float|int|string $value, string $currency = 'TRY'): string { return number_format((float) $value, 2, ',', '.') . ' ' . e($currency); }
-function status_label(string $status): string { return ['pending' => 'Bekliyor', 'confirmed' => 'Onaylı', 'cancelled' => 'İptal', 'completed' => 'Geldi', 'no_show' => 'Gelmedi'][$status] ?? $status; }
+function status_label(string $status): string { return ['pending' => 'Bekliyor', 'confirmed' => 'Onaylı', 'cancelled' => 'İptal', 'completed' => 'Tamamlandı', 'no_show' => 'Gelmedi'][$status] ?? $status; }
 function status_account_label(string $status): string { return ['active' => 'Aktif', 'pending' => 'Bekliyor', 'suspended' => 'Askıda', 'passive' => 'Pasif'][$status] ?? $status; }
 function payment_label(string $status): string { return PaymentService::STATUSES[$status] ?? $status; }
 function clinical_type_label(string $type): string { return ['assessment' => 'İlk değerlendirme', 'treatment' => 'Seans / uygulama notu', 'progress' => 'İlerleme değerlendirmesi', 'discharge' => 'Süreç sonu notu'][$type] ?? $type; }
