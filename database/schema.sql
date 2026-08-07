@@ -1,5 +1,5 @@
 -- FizyoRez beta - clean installation schema (MySQL 8 / MariaDB 10.4+)
--- Existing beta databases should run database/migrations/002_wallets_date_calendars.sql instead.
+-- Existing beta databases should run migrations 002 and 003 in numeric order instead.
 
 SET NAMES utf8mb4;
 
@@ -225,6 +225,26 @@ CREATE TABLE IF NOT EXISTS reservations (
     INDEX idx_reservations_payment (payment_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS reservation_change_requests (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    reservation_id BIGINT UNSIGNED NOT NULL,
+    requested_by INT UNSIGNED NOT NULL,
+    requested_starts_at DATETIME NOT NULL,
+    status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+    reviewed_by INT UNSIGNED NULL,
+    review_note VARCHAR(500) NULL,
+    reviewed_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    pending_reservation_id BIGINT UNSIGNED GENERATED ALWAYS AS (CASE WHEN status = 'pending' THEN reservation_id ELSE NULL END) STORED,
+    FOREIGN KEY (reservation_id) REFERENCES reservations(id) ON DELETE CASCADE,
+    FOREIGN KEY (requested_by) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE KEY uq_pending_reservation_change (pending_reservation_id),
+    INDEX idx_reservation_change_status (status, created_at),
+    INDEX idx_reservation_change_reservation (reservation_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS credit_transactions (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     customer_package_id INT UNSIGNED NOT NULL,
@@ -408,6 +428,7 @@ INSERT IGNORE INTO permissions (slug, name, permission_group) VALUES
 ('roles.view', 'Rol matrisini görüntüleme', 'Yetkilendirme'), ('roles.manage', 'Rol yetkilerini değiştirme', 'Yetkilendirme'),
 ('reservations.view_all', 'Tüm rezervasyonları görüntüleme', 'Rezervasyon'), ('reservations.manage_all', 'Tüm rezervasyonları yönetme', 'Rezervasyon'),
 ('reservations.manage_own', 'Kendi rezervasyonlarını yönetme', 'Rezervasyon'),
+('reservations.reschedule_approve', 'Danışan tarih değişikliği taleplerini onaylama', 'Rezervasyon'),
 ('schedules.view_all', 'Tüm çalışma programlarını görüntüleme', 'Takvim'), ('schedules.manage_all', 'Tüm çalışma programlarını yönetme', 'Takvim'),
 ('schedules.manage_own', 'Kendi çalışma programını yönetme', 'Takvim'), ('time_off.manage_all', 'Tüm izinleri yönetme', 'Takvim'),
 ('time_off.manage_own', 'Kendi izinlerini yönetme', 'Takvim'),
@@ -426,7 +447,7 @@ INSERT IGNORE INTO permissions (slug, name, permission_group) VALUES
 INSERT IGNORE INTO role_permissions (role_id, permission_id)
 SELECT 2, id FROM permissions WHERE slug IN (
     'dashboard.view','users.view','users.create','users.update','users.change_status',
-    'roles.view','reservations.view_all','reservations.manage_all','schedules.view_all','schedules.manage_all',
+    'roles.view','reservations.view_all','reservations.manage_all','reservations.reschedule_approve','schedules.view_all','schedules.manage_all',
     'time_off.manage_all','services.manage','packages.manage','credits.adjust','payments.view_all','payments.create',
     'payments.approve','payments.refund','clinical.view_all','clinical.create','clinical.edit','exercises.manage','reports.view','audit_logs.view'
 );

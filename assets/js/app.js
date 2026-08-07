@@ -58,6 +58,24 @@ document.querySelectorAll('[data-book-consultant]').forEach((button) => {
     });
 });
 
+document.querySelectorAll('[data-edit-reservation]').forEach((button) => {
+    button.addEventListener('click', () => {
+        const form = document.querySelector('[data-scheduler-edit-form]');
+        const empty = document.querySelector('[data-scheduler-edit-empty]');
+        const label = form?.querySelector('[data-scheduler-edit-label]');
+        const reservationId = form?.querySelector('[name="reservation_id"]');
+        const startsAt = form?.querySelector('[name="starts_at"]');
+        if (!form || !reservationId || !startsAt) return;
+        form.hidden = false;
+        if (empty) empty.hidden = true;
+        reservationId.value = button.dataset.editReservation || '';
+        startsAt.value = button.dataset.editStart || '';
+        if (label) label.textContent = button.dataset.editLabel || 'Seçili randevu';
+        form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        startsAt.focus({ preventScroll: true });
+    });
+});
+
 document.querySelectorAll('[data-confirm]').forEach((control) => {
     control.addEventListener('click', (event) => {
         if (!window.confirm(control.dataset.confirm || 'Bu işlemi onaylıyor musunuz?')) {

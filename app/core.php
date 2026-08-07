@@ -142,7 +142,7 @@ function friendly_error_message(Throwable $e): string
     $message = $e->getMessage();
 
     if (str_contains($message, 'SQLSTATE[42S02]') || str_contains($message, 'Base table or view not found')) {
-        return 'Veritabanı şeması eksik. Yeni kurulumda database/schema.sql, mevcut kurulumda database/migrations/002_wallets_date_calendars.sql dosyasını içe aktarın.';
+        return 'Veritabanı şeması eksik. Yeni kurulumda database/schema.sql; mevcut kurulumda database/migrations klasöründeki dosyaları numara sırasıyla içe aktarın.';
     }
 
     if (str_contains($message, 'SQLSTATE[HY000] [1049]') || str_contains($message, 'Unknown database')) {
@@ -208,6 +208,7 @@ function setup_checks(): array
             'consultant_calendar_slots',
             'consultant_time_off',
             'reservations',
+            'reservation_change_requests',
             'mail_queue',
             'roles',
             'permissions',

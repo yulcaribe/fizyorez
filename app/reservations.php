@@ -36,16 +36,19 @@ final class ReservationService
             $params[] = $filters['to'];
         }
 
+        $order = !empty($filters['from']) ? 'ASC' : 'DESC';
         return DB::fetchAll(
             'SELECT r.*, s.name AS service_name, s.type AS service_type,
                     c.name AS customer_name, c.email AS customer_email,
-                    k.name AS consultant_name, k.email AS consultant_email
+                    k.name AS consultant_name, k.email AS consultant_email,
+                    cr.id AS pending_change_id, cr.requested_starts_at AS pending_requested_starts_at
              FROM reservations r
              INNER JOIN services s ON s.id = r.service_id
              INNER JOIN users c ON c.id = r.customer_id
              INNER JOIN users k ON k.id = r.consultant_id
+             LEFT JOIN reservation_change_requests cr ON cr.reservation_id = r.id AND cr.status = "pending"
              WHERE ' . implode(' AND ', $where) . '
-             ORDER BY r.starts_at DESC
+             ORDER BY r.starts_at ' . $order . '
              LIMIT 300',
             $params
         );
@@ -139,6 +142,15 @@ final class ReservationService
         }
 
         self::assertReservationAccess($actor, $reservation);
+        if ($actor['role'] === 'customer') {
+            $request = self::requestReschedule($actor, $reservation, $newStartsAt);
+            $reservation['change_request'] = $request;
+
+            return $reservation;
+        }
+        if (!can($actor, 'reservations.manage_all') && !($actor['role'] === 'consultant' && can($actor, 'reservations.manage_own'))) {
+            throw new RuntimeException('Rezervasyon tarihini değiştirme yetkiniz yok.');
+        }
         if (!can($actor, 'reservations.manage_all') && self::isPastChangeDeadline((string) $reservation['starts_at'], (int) $reservation['consultant_id'])) {
             throw new RuntimeException('Bu rezervasyon için değişiklik süresi geçmiş.');
         }
@@ -167,6 +179,12 @@ final class ReservationService
                 'UPDATE reservations SET starts_at = ?, ends_at = ?, updated_at = NOW() WHERE id = ?',
                 [$startsAt, $endsAt, $reservationId]
             );
+            DB::execute(
+                'UPDATE reservation_change_requests
+                 SET status = "rejected", reviewed_by = ?, review_note = "Rezervasyon yetkili tarafından doğrudan değiştirildi.", reviewed_at = NOW(), updated_at = NOW()
+                 WHERE reservation_id = ? AND status = "pending"',
+                [$actor['id'], $reservationId]
+            );
             Audit::record((int) $actor['id'], 'reservation.rescheduled', 'reservation', $reservationId, ['starts_at' => $startsAt]);
             DB::pdo()->commit();
         } catch (Throwable $e) {
@@ -177,6 +195,133 @@ final class ReservationService
         Mailer::queueReservationMail($reservationId, 'reservation_updated');
 
         return self::find($reservationId);
+    }
+
+    public static function pendingChangeRequests(array $actor): array
+    {
+        Authorization::require($actor, 'reservations.reschedule_approve');
+
+        return DB::fetchAll(
+            'SELECT cr.*, r.starts_at AS current_starts_at, r.status AS reservation_status,
+                    c.name AS customer_name, k.name AS consultant_name, s.name AS service_name,
+                    requester.name AS requested_by_name
+             FROM reservation_change_requests cr
+             INNER JOIN reservations r ON r.id = cr.reservation_id
+             INNER JOIN users c ON c.id = r.customer_id
+             INNER JOIN users k ON k.id = r.consultant_id
+             INNER JOIN services s ON s.id = r.service_id
+             INNER JOIN users requester ON requester.id = cr.requested_by
+             WHERE cr.status = "pending"
+             ORDER BY cr.created_at ASC
+             LIMIT 100'
+        );
+    }
+
+    public static function reviewChangeRequest(array $actor, int $requestId, string $decision, string $note = ''): array
+    {
+        Authorization::require($actor, 'reservations.reschedule_approve');
+        if (!in_array($decision, ['approved', 'rejected'], true)) {
+            throw new RuntimeException('Onay kararı geçersiz.');
+        }
+
+        DB::pdo()->beginTransaction();
+        try {
+            $request = DB::fetch('SELECT * FROM reservation_change_requests WHERE id = ? FOR UPDATE', [$requestId]);
+            if (!$request || $request['status'] !== 'pending') {
+                throw new RuntimeException('Bu değişiklik talebi daha önce sonuçlandırılmış.');
+            }
+            $reservation = DB::fetch('SELECT * FROM reservations WHERE id = ? FOR UPDATE', [$request['reservation_id']]);
+            if (!$reservation) {
+                throw new RuntimeException('Rezervasyon bulunamadı.');
+            }
+
+            if ($decision === 'approved') {
+                if (!in_array($reservation['status'], self::ACTIVE_STATUSES, true)) {
+                    throw new RuntimeException('Rezervasyon artık değiştirilebilir durumda değil.');
+                }
+                $service = DB::fetch('SELECT * FROM services WHERE id = ?', [$reservation['service_id']]);
+                if (!$service) {
+                    throw new RuntimeException('Hizmet bulunamadı.');
+                }
+                $startsAt = self::normalizeDateTime((string) $request['requested_starts_at']);
+                $start = new DateTimeImmutable($startsAt);
+                if ($start < new DateTimeImmutable('-5 minutes')) {
+                    throw new RuntimeException('Talep edilen tarih artık geçmişte kaldığı için onaylanamaz.');
+                }
+                $endsAt = $start->modify('+' . (int) $service['duration_minutes'] . ' minutes')->format('Y-m-d H:i:s');
+                self::lockActors((int) $reservation['customer_id'], (int) $reservation['consultant_id']);
+                self::assertSlotAvailable(
+                    (int) $reservation['customer_id'],
+                    (int) $reservation['consultant_id'],
+                    $service,
+                    $startsAt,
+                    $endsAt,
+                    (int) $reservation['id']
+                );
+                DB::execute(
+                    'UPDATE reservations SET starts_at = ?, ends_at = ?, updated_at = NOW() WHERE id = ?',
+                    [$startsAt, $endsAt, $reservation['id']]
+                );
+            }
+
+            DB::execute(
+                'UPDATE reservation_change_requests
+                 SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = NOW(), updated_at = NOW()
+                 WHERE id = ?',
+                [$decision, $actor['id'], trim($note), $requestId]
+            );
+            Audit::record((int) $actor['id'], 'reservation.change_request_' . $decision, 'reservation_change_request', $requestId, [
+                'reservation_id' => (int) $reservation['id'],
+                'requested_starts_at' => (string) $request['requested_starts_at'],
+            ]);
+            DB::pdo()->commit();
+        } catch (Throwable $e) {
+            DB::pdo()->rollBack();
+            throw $e;
+        }
+
+        if ($decision === 'approved') {
+            Mailer::queueReservationMail((int) $request['reservation_id'], 'reservation_updated');
+        }
+
+        return DB::fetch('SELECT * FROM reservation_change_requests WHERE id = ?', [$requestId]) ?? [];
+    }
+
+    public static function scheduleItems(array $actor, string $from, string $to): array
+    {
+        $start = DateTimeImmutable::createFromFormat('!Y-m-d', substr($from, 0, 10));
+        $end = DateTimeImmutable::createFromFormat('!Y-m-d', substr($to, 0, 10));
+        if (!$start || !$end || $start > $end || $start->diff($end)->days > 14) {
+            throw new RuntimeException('Planlama görünümü en fazla 15 günlük olabilir.');
+        }
+
+        $where = ['r.status IN ("pending", "confirmed")', 'r.starts_at >= ?', 'r.starts_at < ?'];
+        $params = [$start->format('Y-m-d 00:00:00'), $end->modify('+1 day')->format('Y-m-d 00:00:00')];
+        if ($actor['role'] === 'consultant' && !can($actor, 'reservations.view_all')) {
+            Authorization::require($actor, 'reservations.manage_own');
+            $where[] = 'r.consultant_id = ?';
+            $params[] = $actor['id'];
+        } else {
+            Authorization::require($actor, 'reservations.view_all');
+        }
+
+        return DB::fetchAll(
+            'SELECT r.id, r.consultant_id, r.starts_at, r.ends_at, r.status,
+                    c.name AS customer_name, s.name AS service_name
+             FROM reservations r
+             INNER JOIN users c ON c.id = r.customer_id
+             INNER JOIN services s ON s.id = r.service_id
+             WHERE ' . implode(' AND ', $where) . '
+             ORDER BY r.starts_at ASC',
+            $params
+        );
+    }
+
+    public static function customerCanRequestChange(array $reservation): bool
+    {
+        return in_array($reservation['status'], self::ACTIVE_STATUSES, true)
+            && empty($reservation['pending_change_id'])
+            && !self::isPastChangeDeadline((string) $reservation['starts_at'], (int) $reservation['consultant_id']);
     }
 
     public static function cancel(array $actor, int $reservationId): array
@@ -207,6 +352,12 @@ final class ReservationService
             DB::execute(
                 'UPDATE reservations SET status = "cancelled", late_cancelled = ?, updated_at = NOW() WHERE id = ?',
                 [$late ? 1 : 0, $reservationId]
+            );
+            DB::execute(
+                'UPDATE reservation_change_requests
+                 SET status = "rejected", reviewed_by = ?, review_note = "Rezervasyon iptal edildi.", reviewed_at = NOW(), updated_at = NOW()
+                 WHERE reservation_id = ? AND status = "pending"',
+                [$actor['id'], $reservationId]
             );
             Audit::record((int) $actor['id'], 'reservation.cancelled', 'reservation', $reservationId, ['late' => $late, 'credit_returned' => !$late || !$burnLateCredit]);
             DB::pdo()->commit();
@@ -260,6 +411,14 @@ final class ReservationService
             }
 
             DB::execute('UPDATE reservations SET status = ?, updated_at = NOW() WHERE id = ?', [$status, $reservationId]);
+            if (in_array($status, ['completed', 'no_show'], true)) {
+                DB::execute(
+                    'UPDATE reservation_change_requests
+                     SET status = "rejected", reviewed_by = ?, review_note = "Rezervasyon sonuçlandırıldı.", reviewed_at = NOW(), updated_at = NOW()
+                     WHERE reservation_id = ? AND status = "pending"',
+                    [$actor['id'], $reservationId]
+                );
+            }
             Audit::record((int) $actor['id'], 'reservation.status_updated', 'reservation', $reservationId, ['status' => $status]);
             DB::pdo()->commit();
         } catch (Throwable $e) {
@@ -289,6 +448,70 @@ final class ReservationService
              WHERE r.id = ?',
             [$reservationId]
         );
+    }
+
+    private static function requestReschedule(array $actor, array $reservation, string $newStartsAt): array
+    {
+        if ((int) $actor['id'] !== (int) $reservation['customer_id']) {
+            throw new RuntimeException('Yalnızca kendi rezervasyonunuz için değişiklik talebi gönderebilirsiniz.');
+        }
+        if (!in_array($reservation['status'], self::ACTIVE_STATUSES, true)) {
+            throw new RuntimeException('Tamamlanmış veya iptal edilmiş rezervasyon değiştirilemez.');
+        }
+        if (self::isPastChangeDeadline((string) $reservation['starts_at'], (int) $reservation['consultant_id'])) {
+            throw new RuntimeException('Bu rezervasyon için değişiklik süresi geçmiş.');
+        }
+
+        $startsAt = self::normalizeDateTime($newStartsAt);
+        $start = new DateTimeImmutable($startsAt);
+        if ($start < new DateTimeImmutable('-5 minutes')) {
+            throw new RuntimeException('Geçmiş tarih için değişiklik talebi gönderilemez.');
+        }
+        if ($startsAt === (string) $reservation['starts_at']) {
+            throw new RuntimeException('Yeni tarih mevcut rezervasyon tarihiyle aynı olamaz.');
+        }
+        $service = DB::fetch('SELECT * FROM services WHERE id = ?', [$reservation['service_id']]);
+        if (!$service) {
+            throw new RuntimeException('Hizmet bulunamadı.');
+        }
+        $endsAt = $start->modify('+' . (int) $service['duration_minutes'] . ' minutes')->format('Y-m-d H:i:s');
+
+        DB::pdo()->beginTransaction();
+        try {
+            $locked = DB::fetch('SELECT * FROM reservations WHERE id = ? FOR UPDATE', [$reservation['id']]);
+            if (!$locked || !in_array($locked['status'], self::ACTIVE_STATUSES, true)) {
+                throw new RuntimeException('Rezervasyon artık değiştirilebilir durumda değil.');
+            }
+            if (DB::fetch('SELECT id FROM reservation_change_requests WHERE reservation_id = ? AND status = "pending" FOR UPDATE', [$reservation['id']])) {
+                throw new RuntimeException('Bu rezervasyon için zaten onay bekleyen bir tarih değişikliği var.');
+            }
+            self::lockActors((int) $reservation['customer_id'], (int) $reservation['consultant_id']);
+            self::assertSlotAvailable(
+                (int) $reservation['customer_id'],
+                (int) $reservation['consultant_id'],
+                $service,
+                $startsAt,
+                $endsAt,
+                (int) $reservation['id']
+            );
+            $requestId = DB::insert(
+                'INSERT INTO reservation_change_requests
+                    (reservation_id, requested_by, requested_starts_at, status, created_at, updated_at)
+                 VALUES (?, ?, ?, "pending", NOW(), NOW())',
+                [$reservation['id'], $actor['id'], $startsAt]
+            );
+            Audit::record((int) $actor['id'], 'reservation.change_requested', 'reservation_change_request', $requestId, [
+                'reservation_id' => (int) $reservation['id'],
+                'current_starts_at' => (string) $reservation['starts_at'],
+                'requested_starts_at' => $startsAt,
+            ]);
+            DB::pdo()->commit();
+        } catch (Throwable $e) {
+            DB::pdo()->rollBack();
+            throw $e;
+        }
+
+        return DB::fetch('SELECT * FROM reservation_change_requests WHERE id = ?', [$requestId]) ?? [];
     }
 
     private static function assertCanManagePair(array $actor, int $customerId, int $consultantId): void

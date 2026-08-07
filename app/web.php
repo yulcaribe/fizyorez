@@ -95,6 +95,7 @@ function handle_web_action(array $user, string $path): never
             case 'create_reservation': ReservationService::create($user, $_POST); break;
             case 'cancel_reservation': ReservationService::cancel($user, (int) $_POST['reservation_id']); break;
             case 'reschedule_reservation': ReservationService::reschedule($user, (int) $_POST['reservation_id'], (string) $_POST['starts_at']); break;
+            case 'review_reschedule_request': ReservationService::reviewChangeRequest($user, (int) $_POST['request_id'], (string) $_POST['decision'], (string) ($_POST['review_note'] ?? '')); break;
             case 'set_reservation_status': ReservationService::setStatus($user, (int) $_POST['reservation_id'], (string) $_POST['status']); break;
             case 'save_date_availability': ScheduleService::saveDate($user, $_POST); break;
             case 'clear_date_availability': ScheduleService::clearDate($user, $_POST); break;
@@ -237,7 +238,7 @@ function page_title(string $path): string
     return [
         '/admin' => 'Genel Bakış', '/admin/users' => 'Personel Yönetimi', '/admin/customers' => 'Danışanlar', '/admin/roles' => 'Rol ve Yetkiler',
         '/admin/services' => 'Hizmetler', '/admin/packages' => 'Paket ve Haklar', '/admin/reservations' => 'Rezervasyonlar',
-        '/admin/availability' => 'Çalışma Günleri', '/admin/time-off' => 'İzin ve Molalar', '/admin/payments' => 'Ödemeler',
+        '/admin/availability' => 'Takvim ve Planlama', '/admin/time-off' => 'İzin ve Molalar', '/admin/payments' => 'Ödemeler',
         '/admin/reports' => 'Raporlar', '/admin/settings' => 'Sistem Ayarları', '/admin/profile' => 'Profilim',
         '/admin/clinical' => 'Fizyoterapi Kayıtları', '/admin/exercises' => 'Egzersiz Programları',
         '/admin/audit' => 'İşlem Kayıtları',
@@ -268,7 +269,7 @@ function nav_links(array $user, string $path): string
         if (can($user, 'packages.manage')) $links['/admin/packages'] = 'Paket ve Haklar';
         if (can($user, 'clinical.view_all')) $links['/admin/clinical'] = 'Fizyoterapi Kayıtları';
         if (can($user, 'exercises.manage')) $links['/admin/exercises'] = 'Egzersiz Programları';
-        if (can($user, 'schedules.manage_own') || can($user, 'schedules.view_all')) $links['/admin/availability'] = 'Çalışma Günleri';
+        if (can($user, 'schedules.manage_own') || can($user, 'schedules.view_all')) $links['/admin/availability'] = 'Takvim ve Planlama';
         if (can($user, 'time_off.manage_own') || can($user, 'time_off.manage_all')) $links['/admin/time-off'] = 'İzin ve Molalar';
         if (can($user, 'payments.view_all')) $links['/admin/payments'] = 'Ödemeler';
         if (can($user, 'reports.view')) $links['/admin/reports'] = 'Raporlar';
@@ -394,8 +395,12 @@ function render_packages(array $actor): void
 function render_reservations(array $user, string $path): void
 {
     $filters = $path === '/customer/book' ? ['from' => date('Y-m-d H:i:s')] : [];
+    $reservations = ReservationService::list($user, $filters);
+    if ($user['role'] === 'customer') $reservations = array_slice($reservations, 0, 10);
+    if ($path === '/admin/reservations' && can($user, 'reservations.reschedule_approve')) render_change_request_queue($user);
     if ($path === '/customer/book') render_booking_matrix();
-    ?><section class="panel"><div class="section-heading"><div><p class="eyebrow">Birebir ve grup seansları</p><h2>Yeni rezervasyon</h2></div></div><?php render_reservation_form($user); ?></section><?php render_reservation_table($user, ReservationService::list($user, $filters));
+    if ($path !== '/customer/reservations'): ?><section class="panel"><div class="section-heading"><div><p class="eyebrow">Birebir ve grup seansları</p><h2>Yeni rezervasyon</h2></div></div><?php render_reservation_form($user); ?></section><?php endif;
+    render_reservation_table($user, $reservations);
 }
 
 function render_booking_matrix(): void
@@ -423,6 +428,10 @@ function render_reservation_form(array $user): void
 
 function render_reservation_table(array $user, array $reservations): void
 {
+    if ($user['role'] === 'customer') {
+        render_customer_reservation_cards($user, array_slice($reservations, 0, 10));
+        return;
+    }
     ?><section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($reservations) ?> kayıt</p><h2>Rezervasyonlar</h2></div></div><div class="table-wrap"><table><thead><tr><th>Tarih</th><th>Hizmet</th><th>Danışan</th><th>Fizyoterapist</th><th>Durum</th><th>Ödeme</th><th>İşlem</th></tr></thead><tbody>
     <?php foreach ($reservations as $item): ?><tr><td><strong><?= e(dt((string) $item['starts_at'])) ?></strong><small><?= e($item['reservation_type'] === 'single' ? 'Tek seans' : 'Paket') ?></small></td><td><?= e($item['service_name']) ?></td><td><?= e($item['customer_name']) ?></td><td><?= e($item['consultant_name']) ?></td><td><span class="badge <?= e($item['status']) ?>"><?= e(status_label((string) $item['status'])) ?></span></td><td><span class="badge <?= e($item['payment_status']) ?>"><?= e(payment_label((string) $item['payment_status'])) ?></span></td><td class="actions">
     <?php if (in_array($item['status'], ['pending', 'confirmed'], true)): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="cancel_reservation"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-danger">İptal</button></form><details class="action-pop"><summary class="btn btn-small">Taşı</summary><form method="post" class="popover"><?= csrf_field() ?><input type="hidden" name="action" value="reschedule_reservation"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><input type="datetime-local" name="starts_at" required><button class="btn btn-small">Kaydet</button></form></details><?php endif; ?>
@@ -430,9 +439,27 @@ function render_reservation_table(array $user, array $reservations): void
     <?php if (!$reservations): ?><tr><td colspan="7" class="empty">Henüz rezervasyon yok.</td></tr><?php endif; ?></tbody></table></div></section><?php
 }
 
+function render_customer_reservation_cards(array $user, array $reservations): void
+{
+    ?><section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($reservations) ?> kayıt · En fazla 10</p><h2>Rezervasyonlarım</h2><p class="muted">Yalnızca değişiklik süresi geçmemiş aktif rezervasyonlar için yeni tarih talebi gönderebilirsiniz.</p></div></div><div class="customer-reservation-list">
+    <?php foreach ($reservations as $item): $active = in_array($item['status'], ['pending', 'confirmed'], true); $canRequestChange = ReservationService::customerCanRequestChange($item); ?><article class="customer-reservation-card"><header><div><strong><?= e(dt((string) $item['starts_at'])) ?></strong><small><?= e($item['service_name']) ?> · <?= e($item['reservation_type'] === 'single' ? 'Tek seans' : 'Paket') ?></small></div><span class="badge <?= e($item['status']) ?>"><?= e(status_label((string) $item['status'])) ?></span></header><div class="customer-reservation-meta"><span><small>Fizyoterapist</small><strong><?= e($item['consultant_name']) ?></strong></span><span><small>Ödeme</small><span class="badge <?= e($item['payment_status']) ?>"><?= e(payment_label((string) $item['payment_status'])) ?></span></span></div>
+        <?php if (!empty($item['pending_change_id'])): ?><div class="change-request-pending"><strong>Değişiklik onayı bekleniyor</strong><span>İstenen tarih: <?= e(dt((string) $item['pending_requested_starts_at'])) ?></span></div><?php endif; ?>
+        <?php if ($active): ?><div class="customer-reservation-actions"><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="cancel_reservation"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-danger" data-confirm="Bu rezervasyon iptal edilsin mi?">İptal</button></form><?php if ($canRequestChange): ?><details><summary class="btn btn-small">Tarih Değişikliği İste</summary><form method="post" class="customer-change-form"><?= csrf_field() ?><input type="hidden" name="action" value="reschedule_reservation"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><label>Yeni başlangıç<input type="datetime-local" name="starts_at" required></label><button class="btn btn-primary btn-small">Onaya Gönder</button></form></details><?php endif; ?></div><?php endif; ?>
+    </article><?php endforeach; ?><?php if (!$reservations): ?><p class="empty">Henüz rezervasyon yok.</p><?php endif; ?></div></section><?php
+}
+
+function render_change_request_queue(array $user): void
+{
+    $requests = ReservationService::pendingChangeRequests($user);
+    if (!$requests) return; ?>
+    <section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($requests) ?> onay bekliyor</p><h2>Tarih değişikliği talepleri</h2><p class="muted">Onay anında çalışma programı ve randevu çakışmaları yeniden kontrol edilir.</p></div></div><div class="change-request-list"><?php foreach ($requests as $request): ?><article class="change-request-card"><div><strong><?= e($request['customer_name']) ?></strong><small><?= e($request['consultant_name'] . ' · ' . $request['service_name']) ?></small></div><div class="change-request-dates"><span><small>Mevcut</small><strong><?= e(dt((string) $request['current_starts_at'])) ?></strong></span><span class="change-arrow">→</span><span><small>İstenen</small><strong><?= e(dt((string) $request['requested_starts_at'])) ?></strong></span></div><form method="post" class="change-review-form"><?= csrf_field() ?><input type="hidden" name="action" value="review_reschedule_request"><input type="hidden" name="request_id" value="<?= e($request['id']) ?>"><input name="review_note" placeholder="Onay / ret notu (isteğe bağlı)"><button class="btn btn-small btn-success" name="decision" value="approved">Onayla</button><button class="btn btn-small btn-danger" name="decision" value="rejected">Reddet</button></form></article><?php endforeach; ?></div></section><?php
+}
+
 function render_availability(array $user): void
 {
     $summaries = ScheduleService::calendarSummaries($user);
+    render_admin_scheduler($user);
+    if (can($user, 'reservations.reschedule_approve')) render_change_request_queue($user);
     $manageAll = can($user, 'schedules.manage_all');
     $selectedConsultantId = (int) ($_GET['consultant_id'] ?? ($user['role'] === 'consultant' ? $user['id'] : 0));
     $from = (string) ($_GET['from'] ?? date('Y-m-d'));
@@ -468,6 +495,29 @@ function render_availability(array $user): void
                 </form>
             </details><?php endforeach; ?><?php if (!$days): ?><p class="empty">Bu tarih aralığında kayıt yok.</p><?php endif; ?></div></section>
     <?php elseif ($manageAll): ?><section class="panel empty-state"><h2>Düzenlenecek fizyoterapisti seçin</h2><p>Yukarıdaki listede fizyoterapistin yanındaki Düzenle düğmesine basın.</p></section><?php endif;
+}
+
+function render_admin_scheduler(array $user): void
+{
+    $canSeeReservations = can($user, 'reservations.view_all') || ($user['role'] === 'consultant' && can($user, 'reservations.manage_own'));
+    if (!$canSeeReservations) return;
+
+    $from = date('Y-m-d');
+    $to = date('Y-m-d', strtotime('+6 days'));
+    $onlyConsultants = $user['role'] === 'consultant' && !can($user, 'reservations.view_all') ? [(int) $user['id']] : null;
+    $matrix = ScheduleService::bookingMatrix($from, $to, $onlyConsultants);
+    $reservationMap = [];
+    foreach (ReservationService::scheduleItems($user, $from, $to) as $reservation) {
+        $date = substr((string) $reservation['starts_at'], 0, 10);
+        $reservationMap[$date][(int) $reservation['consultant_id']][] = $reservation;
+    }
+    $canManage = can($user, 'reservations.manage_all') || ($user['role'] === 'consultant' && can($user, 'reservations.manage_own')); ?>
+    <section class="panel admin-scheduler-panel"><div class="section-heading"><div><p class="eyebrow">Bugünden itibaren 7 gün</p><h2>Seans planlama takvimi</h2><p class="muted">Çalışma saatine tıklayarak yeni randevu planlayın; renkli randevu kaydına tıklayarak tarihini değiştirin.</p></div></div>
+    <?php if ($matrix['consultants']): ?><div class="booking-matrix-wrap"><table class="booking-matrix admin-booking-matrix"><thead><tr><th>Gün / Tarih</th><?php foreach ($matrix['consultants'] as $consultant): ?><th><?= e($consultant['name']) ?></th><?php endforeach; ?></tr></thead><tbody><?php foreach ($matrix['days'] as $day): $dayDate = new DateTimeImmutable((string) $day['work_date']); ?><tr><th><strong><?= e(date_only((string) $day['work_date'])) ?></strong><small><?= e(weekdays()[(int) $dayDate->format('N')]) ?></small></th><?php foreach ($matrix['consultants'] as $consultant): $consultantId = (int) $consultant['id']; $availability = $day['consultants'][$consultantId]; $appointments = $reservationMap[$day['work_date']][$consultantId] ?? []; ?><td><div class="scheduler-cell">
+        <?php foreach ($appointments as $appointment): $appointmentLabel = substr((string) $appointment['starts_at'], 11, 5) . '–' . substr((string) $appointment['ends_at'], 11, 5); if ($canManage): ?><button type="button" class="scheduler-appointment" data-edit-reservation="<?= e($appointment['id']) ?>" data-edit-start="<?= e(str_replace(' ', 'T', substr((string) $appointment['starts_at'], 0, 16))) ?>" data-edit-label="<?= e($appointment['customer_name'] . ' · ' . $appointmentLabel) ?>"><strong><?= e($appointmentLabel . ' · ' . $appointment['customer_name']) ?></strong><small><?= e($appointment['service_name']) ?> · Düzenle</small></button><?php else: ?><span class="scheduler-appointment is-readonly"><strong><?= e($appointmentLabel . ' · ' . $appointment['customer_name']) ?></strong><small><?= e($appointment['service_name']) ?></small></span><?php endif; endforeach; ?>
+        <?php if ((int) $availability['is_working'] === 1 && $availability['slots']): ?><div class="scheduler-work-slots"><?php foreach ($availability['slots'] as $slot): $slotLabel = substr((string) $slot['start_time'], 0, 5) . '–' . substr((string) $slot['end_time'], 0, 5); if ($canManage): ?><button type="button" class="booking-slot-cell" data-book-consultant="<?= e($consultantId) ?>" data-book-date="<?= e($day['work_date']) ?>" data-book-time="<?= e(substr((string) $slot['start_time'], 0, 5)) ?>"><strong><?= e($slotLabel) ?></strong><small>Randevu planla</small></button><?php else: ?><span class="booking-slot-cell"><strong><?= e($slotLabel) ?></strong></span><?php endif; endforeach; ?></div><?php else: ?><span class="booking-slot-cell is-closed">Müsait değil</span><?php endif; ?>
+    </div></td><?php endforeach; ?></tr><?php endforeach; ?></tbody></table></div><?php else: ?><p class="empty">Aktif fizyoterapist bulunamadı.</p><?php endif; ?></section>
+    <?php if ($canManage): ?><section class="grid two-col scheduler-editor-grid"><div class="panel" id="scheduler-new-reservation"><p class="eyebrow">Yeni planlama</p><h2>Randevu oluştur</h2><?php render_reservation_form($user); ?></div><div class="panel scheduler-edit-panel"><p class="eyebrow">Mevcut planlama</p><h2>Randevu tarihini değiştir</h2><p class="muted" data-scheduler-edit-empty>Takvimdeki renkli bir randevuya tıklayın.</p><form method="post" class="form-grid single" data-scheduler-edit-form hidden><?= csrf_field() ?><input type="hidden" name="action" value="reschedule_reservation"><input type="hidden" name="reservation_id"><p class="notice" data-scheduler-edit-label></p><label>Yeni başlangıç<input type="datetime-local" name="starts_at" required></label><button class="btn btn-primary">Randevuyu Güncelle</button></form></div></section><?php endif;
 }
 
 function render_time_off(array $user): void

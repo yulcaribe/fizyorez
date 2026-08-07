@@ -79,7 +79,7 @@ final class ScheduleService
         return array_values($days);
     }
 
-    public static function bookingMatrix(string $from, string $to): array
+    public static function bookingMatrix(string $from, string $to, ?array $onlyConsultantIds = null): array
     {
         $start = self::normalizeDate($from);
         $end = self::normalizeDate($to);
@@ -88,9 +88,17 @@ final class ScheduleService
         }
 
         self::upgradeDefaultHours();
-        $consultants = DB::fetchAll(
-            'SELECT id, name FROM users WHERE role = "consultant" AND status = "active" ORDER BY name'
-        );
+        $consultantSql = 'SELECT id, name FROM users WHERE role = "consultant" AND status = "active"';
+        $consultantParams = [];
+        if ($onlyConsultantIds !== null) {
+            $onlyConsultantIds = array_values(array_unique(array_filter(array_map('intval', $onlyConsultantIds), static fn (int $id): bool => $id > 0)));
+            if ($onlyConsultantIds === []) {
+                return ['consultants' => [], 'days' => []];
+            }
+            $consultantSql .= ' AND id IN (' . implode(',', array_fill(0, count($onlyConsultantIds), '?')) . ')';
+            $consultantParams = $onlyConsultantIds;
+        }
+        $consultants = DB::fetchAll($consultantSql . ' ORDER BY name', $consultantParams);
         foreach ($consultants as $consultant) {
             self::ensureDefaultRange((int) $consultant['id'], $start, $end);
         }
