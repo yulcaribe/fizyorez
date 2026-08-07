@@ -6,6 +6,7 @@ final class ScheduleService
 {
     public static function calendarSummaries(array $actor): array
     {
+        self::upgradeDefaultHours();
         $consultants = self::visibleConsultants($actor);
         foreach ($consultants as $consultant) {
             self::ensureDefaultRange((int) $consultant['id'], new DateTimeImmutable('today'), new DateTimeImmutable('+180 days'));
@@ -83,16 +84,27 @@ final class ScheduleService
         $consultantId = self::resolveConsultantId($actor, (int) ($data['consultant_id'] ?? 0));
         $date = self::normalizeDate((string) ($data['work_date'] ?? ''));
         $slots = [];
-        if (!empty($data['morning'])) {
-            $slots[] = ['morning', '09:00:00', '13:00:00'];
+        $workingRequested = !array_key_exists('is_working', $data) || !empty($data['is_working']);
+        if ($workingRequested && !empty($data['morning'])) {
+            $morningStart = self::normalizeTime((string) ($data['morning_start'] ?? '08:00'));
+            $morningEnd = self::normalizeTime((string) ($data['morning_end'] ?? '12:00'));
+            if ($morningStart >= $morningEnd) {
+                throw new RuntimeException('Sabah çalışma başlangıcı bitişten önce olmalıdır.');
+            }
+            $slots[] = ['morning', $morningStart, $morningEnd];
         }
-        if (!empty($data['afternoon'])) {
-            $slots[] = ['afternoon', '13:00:00', '17:00:00'];
+        if ($workingRequested && !empty($data['afternoon'])) {
+            $afternoonStart = self::normalizeTime((string) ($data['afternoon_start'] ?? '13:00'));
+            $afternoonEnd = self::normalizeTime((string) ($data['afternoon_end'] ?? '18:00'));
+            if ($afternoonStart >= $afternoonEnd) {
+                throw new RuntimeException('Öğleden sonra çalışma başlangıcı bitişten önce olmalıdır.');
+            }
+            $slots[] = ['afternoon', $afternoonStart, $afternoonEnd];
         }
 
         $customStartRaw = trim((string) ($data['custom_start'] ?? ''));
         $customEndRaw = trim((string) ($data['custom_end'] ?? ''));
-        if ($customStartRaw !== '' || $customEndRaw !== '') {
+        if ($workingRequested && ($customStartRaw !== '' || $customEndRaw !== '')) {
             if ($customStartRaw === '' || $customEndRaw === '') {
                 throw new RuntimeException('Özel saat için başlangıç ve bitiş birlikte girilmelidir.');
             }
@@ -102,6 +114,9 @@ final class ScheduleService
                 throw new RuntimeException('Özel çalışma başlangıcı bitişten önce olmalıdır.');
             }
             $slots[] = ['custom', $customStart, $customEnd];
+        }
+        if ($workingRequested && $slots === []) {
+            throw new RuntimeException('Çalışma günü için en az bir saat aralığı seçin.');
         }
         self::assertSlotsDoNotOverlap($slots);
         self::assertReservationsFit($consultantId, $date->format('Y-m-d'), $slots);
@@ -256,13 +271,36 @@ final class ScheduleService
             }
             $calendarDay = DB::fetch('SELECT id FROM consultant_calendar_days WHERE consultant_id = ? AND work_date = ?', [$consultantId, $date]);
             DB::insert(
-                'INSERT IGNORE INTO consultant_calendar_slots (calendar_day_id, period, start_time, end_time) VALUES (?, "morning", "09:00:00", "13:00:00")',
+                'INSERT IGNORE INTO consultant_calendar_slots (calendar_day_id, period, start_time, end_time) VALUES (?, "morning", "08:00:00", "12:00:00")',
                 [$calendarDay['id']]
             );
             DB::insert(
-                'INSERT IGNORE INTO consultant_calendar_slots (calendar_day_id, period, start_time, end_time) VALUES (?, "afternoon", "13:00:00", "17:00:00")',
+                'INSERT IGNORE INTO consultant_calendar_slots (calendar_day_id, period, start_time, end_time) VALUES (?, "afternoon", "13:00:00", "18:00:00")',
                 [$calendarDay['id']]
             );
+        }
+    }
+
+    private static function upgradeDefaultHours(): void
+    {
+        if (setting('calendar_default_hours_version', '1') === '2') {
+            return;
+        }
+
+        DB::pdo()->beginTransaction();
+        try {
+            DB::execute(
+                'UPDATE consultant_calendar_slots s
+                 INNER JOIN consultant_calendar_days d ON d.id = s.calendar_day_id
+                 SET s.start_time = CASE WHEN s.period = "morning" THEN "08:00:00" ELSE "13:00:00" END,
+                     s.end_time = CASE WHEN s.period = "morning" THEN "12:00:00" ELSE "18:00:00" END
+                 WHERE d.source = "default" AND s.period IN ("morning", "afternoon")'
+            );
+            save_setting('calendar_default_hours_version', '2');
+            DB::pdo()->commit();
+        } catch (Throwable $e) {
+            DB::pdo()->rollBack();
+            throw $e;
         }
     }
 

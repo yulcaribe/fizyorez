@@ -449,7 +449,8 @@ INSERT IGNORE INTO settings (setting_key, setting_value) VALUES
 ('booking_change_deadline_hours', '12'), ('late_cancel_burn_credit', '1'),
 ('credit_deduction_policy', 'on_booking'), ('reservation_reminder_hours', '24'),
 ('currency', 'TRY'), ('bank_name', ''), ('bank_iban', ''), ('bank_account_name', ''),
-('test_card_number', '4242424242424242'), ('test_card_expiry', '12/30'), ('test_card_cvv', '123');
+('test_card_number', '4242424242424242'), ('test_card_expiry', '12/30'), ('test_card_cvv', '123'),
+('calendar_default_hours_version', '2');
 
 -- Beta demo accounts. Password: password (change immediately outside local test environments).
 INSERT IGNORE INTO users (id, role, name, email, phone, password_hash, status, privacy_consent_at) VALUES
@@ -477,6 +478,6 @@ INSERT IGNORE INTO credit_transactions (id, customer_package_id, customer_id, am
 (1, 1, 3, 10, 0, 10, 'package_assigned', 'Demo paket açılış bakiyesi', 1);
 
 INSERT IGNORE INTO consultant_availability (id, consultant_id, weekday, start_time, end_time, is_active) VALUES
-(1, 2, 1, '09:00:00', '18:00:00', 1), (2, 2, 2, '09:00:00', '18:00:00', 1),
-(3, 2, 3, '09:00:00', '18:00:00', 1), (4, 2, 4, '09:00:00', '18:00:00', 1),
-(5, 2, 5, '09:00:00', '18:00:00', 1), (6, 2, 6, '10:00:00', '15:00:00', 1);
+(1, 2, 1, '08:00:00', '18:00:00', 1), (2, 2, 2, '08:00:00', '18:00:00', 1),
+(3, 2, 3, '08:00:00', '18:00:00', 1), (4, 2, 4, '08:00:00', '18:00:00', 1),
+(5, 2, 5, '08:00:00', '18:00:00', 1), (6, 2, 6, '08:00:00', '18:00:00', 1);

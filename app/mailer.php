@@ -32,7 +32,7 @@ final class Mailer
             return;
         }
 
-        $starts = (new DateTimeImmutable((string) $reservation['starts_at']))->format('d.m.Y H:i');
+        $starts = (new DateTimeImmutable((string) $reservation['starts_at']))->format('d-m-Y H:i');
         $titles = [
             'reservation_created' => 'Rezervasyon oluşturuldu',
             'reservation_updated' => 'Rezervasyon güncellendi',
