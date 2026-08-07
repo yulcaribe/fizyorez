@@ -96,14 +96,16 @@ function handle_web_action(array $user, string $path): never
             case 'cancel_reservation': ReservationService::cancel($user, (int) $_POST['reservation_id']); break;
             case 'reschedule_reservation': ReservationService::reschedule($user, (int) $_POST['reservation_id'], (string) $_POST['starts_at']); break;
             case 'set_reservation_status': ReservationService::setStatus($user, (int) $_POST['reservation_id'], (string) $_POST['status']); break;
-            case 'add_availability': ScheduleService::addAvailability($user, $_POST); break;
-            case 'delete_availability': ScheduleService::deleteAvailability($user, (int) $_POST['availability_id']); break;
+            case 'save_date_availability': ScheduleService::saveDate($user, $_POST); break;
+            case 'generate_calendar': ScheduleService::generateCalendar($user, (int) ($_POST['consultant_id'] ?? 0), (string) $_POST['from_date'], (string) $_POST['to_date']); break;
             case 'add_time_off': ScheduleService::addTimeOff($user, $_POST); break;
             case 'delete_time_off': ScheduleService::deleteTimeOff($user, (int) $_POST['time_off_id']); break;
             case 'create_payment': PaymentService::create($user, $_POST); break;
             case 'approve_payment': PaymentService::approve($user, (int) $_POST['payment_id']); break;
             case 'cancel_payment': PaymentService::cancel($user, (int) $_POST['payment_id']); break;
             case 'refund_payment': PaymentService::refund($user, (int) $_POST['payment_id'], (string) ($_POST['note'] ?? '')); break;
+            case 'reopen_payment': PaymentService::reopen($user, (int) $_POST['payment_id'], (string) ($_POST['note'] ?? '')); break;
+            case 'simulate_wallet_topup': WalletService::simulateTopUp($user, $_POST); break;
             case 'update_profile': Auth::updateOwnProfile($user, $_POST); break;
             case 'change_password': Auth::changePassword($user, $_POST); break;
             case 'create_clinical_note': ClinicalService::createNote($user, $_POST); break;
@@ -117,15 +119,36 @@ function handle_web_action(array $user, string $path): never
     } catch (Throwable $e) {
         flash('error', friendly_error_message($e));
     }
+    $returnStatus = (string) ($_POST['return_status'] ?? '');
+    if ($path === '/admin/payments' && isset(PaymentService::STATUSES[$returnStatus])) {
+        redirect_to($path . '?status=' . rawurlencode($returnStatus));
+    }
     redirect_to($path);
 }
 
 function save_settings_action(array $user): void
 {
     Authorization::require($user, 'settings.manage');
+    if (array_key_exists('test_card_number', $_POST)) {
+        $_POST['test_card_number'] = preg_replace('/\D+/', '', (string) $_POST['test_card_number']);
+        $_POST['test_card_cvv'] = preg_replace('/\D+/', '', (string) ($_POST['test_card_cvv'] ?? ''));
+        $_POST['test_card_expiry'] = preg_replace('/\s+/', '', (string) ($_POST['test_card_expiry'] ?? ''));
+        if (strlen((string) $_POST['test_card_number']) < 12 || strlen((string) $_POST['test_card_number']) > 19
+            || !preg_match('#^\d{2}/\d{2}$#', (string) $_POST['test_card_expiry'])
+            || strlen((string) $_POST['test_card_cvv']) < 3 || strlen((string) $_POST['test_card_cvv']) > 4) {
+            throw new RuntimeException('Test kartı bilgileri geçersiz.');
+        }
+    }
+    if (array_key_exists('currency', $_POST)) {
+        $_POST['currency'] = strtoupper(trim((string) $_POST['currency']));
+        if (!preg_match('/^[A-Z]{3}$/', (string) $_POST['currency'])) {
+            throw new RuntimeException('Para birimi üç harfli kod olmalıdır.');
+        }
+    }
     $allowed = [
         'booking_change_deadline_hours', 'late_cancel_burn_credit', 'credit_deduction_policy',
         'reservation_reminder_hours', 'currency', 'bank_name', 'bank_iban', 'bank_account_name',
+        'test_card_number', 'test_card_expiry', 'test_card_cvv',
     ];
     foreach ($allowed as $key) {
         if (array_key_exists($key, $_POST)) {
@@ -211,7 +234,7 @@ function assert_role_path(array $user, string $path): void
 function page_title(string $path): string
 {
     return [
-        '/admin' => 'Genel Bakış', '/admin/users' => 'Kullanıcı Yönetimi', '/admin/roles' => 'Rol ve Yetkiler',
+        '/admin' => 'Genel Bakış', '/admin/users' => 'Personel Yönetimi', '/admin/customers' => 'Danışanlar', '/admin/roles' => 'Rol ve Yetkiler',
         '/admin/services' => 'Hizmetler', '/admin/packages' => 'Paket ve Haklar', '/admin/reservations' => 'Rezervasyonlar',
         '/admin/availability' => 'Çalışma Günleri', '/admin/time-off' => 'İzin ve Molalar', '/admin/payments' => 'Ödemeler',
         '/admin/reports' => 'Raporlar', '/admin/settings' => 'Sistem Ayarları', '/admin/profile' => 'Profilim',
@@ -235,7 +258,10 @@ function nav_links(array $user, string $path): string
     } else {
         $links = ['/admin' => 'Genel Bakış'];
         if (can($user, 'reservations.view_all') || can($user, 'reservations.manage_own')) $links['/admin/reservations'] = 'Rezervasyonlar';
-        if (can($user, 'users.view')) $links['/admin/users'] = 'Kullanıcılar';
+        if (can($user, 'users.view')) {
+            $links['/admin/users'] = 'Personel';
+            $links['/admin/customers'] = 'Danışanlar';
+        }
         if (can($user, 'roles.view')) $links['/admin/roles'] = 'Rol ve Yetkiler';
         if (can($user, 'services.manage')) $links['/admin/services'] = 'Hizmetler';
         if (can($user, 'packages.manage')) $links['/admin/packages'] = 'Paket ve Haklar';
@@ -261,7 +287,8 @@ function render_route(array $user, string $path): void
     switch ($path) {
         case '/admin': Authorization::require($user, 'dashboard.view'); render_dashboard($user); break;
         case '/customer': render_dashboard($user); break;
-        case '/admin/users': Authorization::require($user, 'users.view'); render_users($user); break;
+        case '/admin/users': Authorization::require($user, 'users.view'); render_users($user, false); break;
+        case '/admin/customers': Authorization::require($user, 'users.view'); render_users($user, true); break;
         case '/admin/roles': Authorization::require($user, 'roles.view'); render_roles($user); break;
         case '/admin/services': Authorization::require($user, 'services.manage'); render_services(); break;
         case '/admin/packages': Authorization::require($user, 'packages.manage'); render_packages($user); break;
@@ -286,8 +313,9 @@ function render_dashboard(array $user): void
     if ($user['role'] === 'customer') {
         $packages = DB::fetchAll(Management::customerPackageSql() . ' WHERE cp.customer_id = ? ORDER BY cp.expires_at ASC', [$user['id']]);
         $upcoming = ReservationService::list($user, ['from' => date('Y-m-d H:i:s')]);
+        $walletBalance = WalletService::balance((int) $user['id']);
         ?><section class="welcome-card"><div><p class="eyebrow">Hoş geldiniz</p><h2><?= e($user['name']) ?></h2><p>Randevularınızı, paket haklarınızı ve ödeme durumunuzu buradan takip edebilirsiniz.</p></div><a class="btn btn-light" href="<?= e(url_for('/customer/book')) ?>">Yeni Randevu</a></section>
-        <section class="grid cards-3"><div class="metric"><span>Aktif paket</span><strong><?= count(array_filter($packages, fn ($p) => $p['status'] === 'active')) ?></strong></div><div class="metric"><span>Kalan hak</span><strong><?= array_sum(array_map(fn ($p) => (int) $p['credits_remaining'], $packages)) ?></strong></div><div class="metric"><span>Yaklaşan randevu</span><strong><?= count($upcoming) ?></strong></div></section><?php
+        <section class="grid cards-4"><div class="metric"><span>Aktif paket</span><strong><?= count(array_filter($packages, fn ($p) => $p['status'] === 'active')) ?></strong></div><div class="metric"><span>Kalan hak</span><strong><?= array_sum(array_map(fn ($p) => (int) $p['credits_remaining'], $packages)) ?></strong></div><div class="metric"><span>Yaklaşan randevu</span><strong><?= count($upcoming) ?></strong></div><div class="metric accent"><span>Test bakiyesi</span><strong><?= money($walletBalance) ?></strong></div></section><?php
         render_reservation_table($user, array_slice($upcoming, 0, 8));
         return;
     }
@@ -296,17 +324,27 @@ function render_dashboard(array $user): void
     render_reservation_table($user, ReservationService::list($user, ['from' => date('Y-m-d 00:00:00'), 'to' => date('Y-m-d 23:59:59')]));
 }
 
-function render_users(array $actor): void
+function render_users(array $actor, bool $customersOnly): void
 {
-    $users = DB::fetchAll('SELECT id, role, name, email, phone, status, created_at FROM users ORDER BY FIELD(role, "super_admin", "admin", "staff", "consultant", "customer"), name');
+    $where = $customersOnly ? 'role = "customer"' : 'role != "customer"';
+    $users = DB::fetchAll(
+        'SELECT id, role, name, email, phone, status, created_at FROM users WHERE ' . $where . '
+         ORDER BY FIELD(role, "super_admin", "admin", "staff", "consultant", "customer"), name'
+    );
+    $wallets = [];
+    if ($customersOnly) {
+        foreach (WalletService::balancesForCustomers() as $wallet) {
+            $wallets[(int) $wallet['id']] = (float) $wallet['wallet_balance'];
+        }
+    }
     if (can($actor, 'users.create')): ?>
-    <section class="panel"><div class="section-heading"><div><p class="eyebrow">Ekip ve danışanlar</p><h2>Yeni kullanıcı oluştur</h2></div></div><form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="create_user">
-    <label>Rol<select name="role"><option value="customer">Danışan</option><option value="consultant">Fizyoterapist</option><option value="staff">Resepsiyon / Personel</option><?php if ($actor['role'] === 'super_admin'): ?><option value="admin">Yönetici</option><?php endif; ?></select></label>
-    <label>Ad soyad<input name="name" required></label><label>E-posta<input type="email" name="email" required></label><label>Telefon<input name="phone"></label><label>Geçici şifre<input type="password" name="password" minlength="8" required></label><label>Fizyoterapist unvanı<input name="title" placeholder="Fizyoterapist"></label><button class="btn btn-primary">Kullanıcı Oluştur</button></form></section>
+    <section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= $customersOnly ? 'Danışan hesabı' : 'Ekip hesabı' ?></p><h2><?= $customersOnly ? 'Yeni danışan oluştur' : 'Yeni personel oluştur' ?></h2></div></div><form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="create_user">
+    <?php if ($customersOnly): ?><input type="hidden" name="role" value="customer"><?php else: ?><label>Rol<select name="role"><option value="consultant">Fizyoterapist</option><option value="staff">Resepsiyon / Personel</option><?php if ($actor['role'] === 'super_admin'): ?><option value="admin">Yönetici</option><?php endif; ?></select></label><?php endif; ?>
+    <label>Ad soyad<input name="name" required></label><label>E-posta<input type="email" name="email" required></label><label>Telefon<input name="phone"></label><label>Geçici şifre<input type="password" name="password" minlength="8" required></label><?php if (!$customersOnly): ?><label>Fizyoterapist unvanı<input name="title" placeholder="Fizyoterapist"></label><?php endif; ?><button class="btn btn-primary"><?= $customersOnly ? 'Danışan Oluştur' : 'Personel Oluştur' ?></button></form></section>
     <?php endif; ?>
-    <section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($users) ?> kayıt</p><h2>Kullanıcılar</h2></div></div><div class="user-list">
-    <?php foreach ($users as $item): ?><details class="user-row"><summary><span class="avatar"><?= e(mb_strtoupper(mb_substr($item['name'], 0, 1))) ?></span><span class="user-summary"><strong><?= e($item['name']) ?></strong><small><?= e($item['email']) ?> · <?= e(role_label((string) $item['role'])) ?></small></span><span class="badge <?= e($item['status']) ?>"><?= e(status_account_label((string) $item['status'])) ?></span></summary>
-    <?php $editable = can($actor, 'users.update') && ($actor['role'] === 'super_admin' || !in_array($item['role'], ['super_admin', 'admin'], true)); if ($editable): ?><form method="post" class="form-grid compact"><?= csrf_field() ?><input type="hidden" name="action" value="update_user"><input type="hidden" name="user_id" value="<?= e($item['id']) ?>"><label>Ad soyad<input name="name" value="<?= e($item['name']) ?>" required></label><label>E-posta<input type="email" name="email" value="<?= e($item['email']) ?>" required></label><label>Telefon<input name="phone" value="<?= e($item['phone']) ?>"></label><label>Rol<select name="role"><?php user_role_options((string) $item['role'], $actor); ?></select></label><label>Durum<select name="status"><?php foreach (['active' => 'Aktif', 'pending' => 'Bekliyor', 'suspended' => 'Askıda', 'passive' => 'Pasif'] as $value => $label): ?><option value="<?= e($value) ?>" <?= selected($item['status'], $value) ?>><?= e($label) ?></option><?php endforeach; ?></select></label><label>Yeni şifre <small>(isteğe bağlı)</small><input type="password" name="password" minlength="8"></label><button class="btn btn-primary">Değişiklikleri Kaydet</button></form><?php endif; ?></details><?php endforeach; ?>
+    <section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($users) ?> kayıt</p><h2><?= $customersOnly ? 'Danışanlar' : 'Personel ve yöneticiler' ?></h2><p class="muted"><?= $customersOnly ? 'Danışan portalına kendi kaydolanlar ve işletme tarafından açılan hesaplar burada yönetilir.' : 'Personel rolleri danışan hesaplarından ayrı tutulur.' ?></p></div></div><div class="user-list">
+    <?php foreach ($users as $item): ?><details class="user-row"><summary><span class="avatar"><?= e(mb_strtoupper(mb_substr($item['name'], 0, 1))) ?></span><span class="user-summary"><strong><?= e($item['name']) ?></strong><small><?= e($item['email']) ?> · <?= e(role_label((string) $item['role'])) ?><?php if ($customersOnly): ?> · Bakiye <?= money($wallets[(int) $item['id']] ?? 0) ?><?php endif; ?></small></span><span class="badge <?= e($item['status']) ?>"><?= e(status_account_label((string) $item['status'])) ?></span></summary>
+    <?php $editable = can($actor, 'users.update') && ($actor['role'] === 'super_admin' || !in_array($item['role'], ['super_admin', 'admin'], true)); if ($editable): ?><form method="post" class="form-grid compact"><?= csrf_field() ?><input type="hidden" name="action" value="update_user"><input type="hidden" name="user_id" value="<?= e($item['id']) ?>"><label>Ad soyad<input name="name" value="<?= e($item['name']) ?>" required></label><label>E-posta<input type="email" name="email" value="<?= e($item['email']) ?>" required></label><label>Telefon<input name="phone" value="<?= e($item['phone']) ?>"></label><?php if ($customersOnly): ?><input type="hidden" name="role" value="customer"><?php else: ?><label>Rol<select name="role"><?php personnel_role_options((string) $item['role'], $actor); ?></select></label><?php endif; ?><label>Durum<select name="status"><?php foreach (['active' => 'Aktif', 'pending' => 'Bekliyor', 'suspended' => 'Askıda', 'passive' => 'Pasif'] as $value => $label): ?><option value="<?= e($value) ?>" <?= selected($item['status'], $value) ?>><?= e($label) ?></option><?php endforeach; ?></select></label><label>Yeni şifre <small>(isteğe bağlı)</small><input type="password" name="password" minlength="8"></label><button class="btn btn-primary">Değişiklikleri Kaydet</button></form><?php endif; ?></details><?php endforeach; ?>
     </div></section>
     <?php
 }
@@ -369,9 +407,31 @@ function render_reservation_table(array $user, array $reservations): void
 
 function render_availability(array $user): void
 {
-    $items = ScheduleService::availability($user); $manageAll = can($user, 'schedules.manage_all'); ?>
-    <section class="panel"><h2>Çalışma aralığı ekle</h2><p class="muted">Fizyoterapist kendi programını, yetkili resepsiyon personeli tüm fizyoterapistlerin programını düzenleyebilir.</p><form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="add_availability"><?php if ($manageAll): ?><label>Fizyoterapist<select name="consultant_id"><?php options(consultants()); ?></select></label><?php endif; ?><label>Gün<select name="weekday"><?php foreach (weekdays() as $key => $day): ?><option value="<?= e($key) ?>"><?= e($day) ?></option><?php endforeach; ?></select></label><label>Başlangıç<input type="time" name="start_time" value="09:00" required></label><label>Bitiş<input type="time" name="end_time" value="18:00" required></label><button class="btn btn-primary">Programa Ekle</button></form></section>
-    <section class="panel"><h2>Haftalık çalışma günleri</h2><div class="table-wrap"><table><thead><tr><th>Fizyoterapist</th><th>Gün</th><th>Saat</th><th></th></tr></thead><tbody><?php foreach ($items as $item): ?><tr><td><?= e($item['consultant_name']) ?></td><td><?= e(weekdays()[(int) $item['weekday']] ?? '-') ?></td><td><?= e(substr((string) $item['start_time'], 0, 5) . ' – ' . substr((string) $item['end_time'], 0, 5)) ?></td><td><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="delete_availability"><input type="hidden" name="availability_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-danger">Sil</button></form></td></tr><?php endforeach; ?></tbody></table></div></section><?php
+    $summaries = ScheduleService::calendarSummaries($user);
+    $manageAll = can($user, 'schedules.manage_all');
+    $selectedConsultantId = (int) ($_GET['consultant_id'] ?? ($user['role'] === 'consultant' ? $user['id'] : 0));
+    $from = (string) ($_GET['from'] ?? date('Y-m-d'));
+    $to = (string) ($_GET['to'] ?? date('Y-m-d', strtotime('+30 days')));
+    ?>
+    <section class="panel"><div class="section-heading"><div><p class="eyebrow">Tarih bazlı takvim</p><h2>Fizyoterapist takvimleri</h2><p class="muted">Hafta içi tarihler otomatik olarak 09:00–17:00 açılır. Her tarih daha sonra bağımsız düzenlenebilir.</p></div></div><div class="table-wrap"><table><thead><tr><th>Fizyoterapist</th><th>Yaklaşan çalışma günü</th><th>Oluşturulan son tarih</th><th>Aktif tarih</th><th></th></tr></thead><tbody><?php foreach ($summaries as $item): ?><tr><td><strong><?= e($item['consultant_name']) ?></strong></td><td><?= e($item['next_working_date'] ?: '-') ?></td><td><?= e($item['generated_until'] ?: '-') ?></td><td><?= e($item['working_days']) ?></td><td><a class="btn btn-small" href="<?= e(url_for('/admin/availability') . '?consultant_id=' . (int) $item['consultant_id'] . '&from=' . rawurlencode($from) . '&to=' . rawurlencode($to)) ?>">Düzenle</a></td></tr><?php endforeach; ?><?php if (!$summaries): ?><tr><td colspan="5" class="empty">Aktif fizyoterapist yok.</td></tr><?php endif; ?></tbody></table></div></section>
+    <?php if ($selectedConsultantId > 0):
+        $days = ScheduleService::calendarDays($user, $selectedConsultantId, $from, $to);
+        $selectedName = '-';
+        foreach ($summaries as $summary) if ((int) $summary['consultant_id'] === $selectedConsultantId) $selectedName = (string) $summary['consultant_name']; ?>
+        <section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= e($selectedName) ?></p><h2>Tarihleri düzenle</h2></div></div>
+        <form method="get" class="form-grid calendar-filter" action="<?= e(url_for('/admin/availability')) ?>"><input type="hidden" name="consultant_id" value="<?= e($selectedConsultantId) ?>"><label>Başlangıç<input type="date" name="from" value="<?= e($from) ?>" required></label><label>Bitiş<input type="date" name="to" value="<?= e($to) ?>" required></label><button class="btn">Tarihleri Göster</button></form>
+        <form method="post" class="form-grid calendar-generate"><?= csrf_field() ?><input type="hidden" name="action" value="generate_calendar"><input type="hidden" name="consultant_id" value="<?= e($selectedConsultantId) ?>"><label>Otomatik oluşturma başlangıcı<input type="date" name="from_date" value="<?= e($from) ?>" required></label><label>Otomatik oluşturma bitişi<input type="date" name="to_date" value="<?= e(date('Y-m-d', strtotime('+180 days'))) ?>" required></label><button class="btn btn-ghost">Eksik Tarihleri Oluştur</button></form>
+        <div class="calendar-days"><?php foreach ($days as $day):
+            $periods = array_column($day['slots'], 'period');
+            $custom = null;
+            foreach ($day['slots'] as $slot) if ($slot['period'] === 'custom') $custom = $slot; ?>
+            <form method="post" class="calendar-day <?= (int) $day['is_working'] === 1 ? 'is-working' : 'is-closed' ?>"><?= csrf_field() ?><input type="hidden" name="action" value="save_date_availability"><input type="hidden" name="consultant_id" value="<?= e($selectedConsultantId) ?>"><input type="hidden" name="work_date" value="<?= e($day['work_date']) ?>">
+                <div class="calendar-date"><strong><?= e((new DateTimeImmutable($day['work_date']))->format('d.m.Y')) ?></strong><small><?= e(weekdays()[(int) (new DateTimeImmutable($day['work_date']))->format('N')]) ?> · <?= $day['source'] === 'manual' ? 'Elle düzenlendi' : 'Otomatik' ?></small></div>
+                <label class="check-label"><input type="checkbox" name="morning" value="1" <?= in_array('morning', $periods, true) ? 'checked' : '' ?>><span>Sabah 09:00–13:00</span></label>
+                <label class="check-label"><input type="checkbox" name="afternoon" value="1" <?= in_array('afternoon', $periods, true) ? 'checked' : '' ?>><span>Öğleden sonra 13:00–17:00</span></label>
+                <label>Özel başlangıç<input type="time" name="custom_start" value="<?= e($custom ? substr((string) $custom['start_time'], 0, 5) : '') ?>"></label><label>Özel bitiş<input type="time" name="custom_end" value="<?= e($custom ? substr((string) $custom['end_time'], 0, 5) : '') ?>"></label><button class="btn btn-small btn-primary">Günü Kaydet</button>
+            </form><?php endforeach; ?></div></section>
+    <?php elseif ($manageAll): ?><section class="panel empty-state"><h2>Düzenlenecek fizyoterapisti seçin</h2><p>Yukarıdaki listede fizyoterapistin yanındaki Düzenle düğmesine basın.</p></section><?php endif;
 }
 
 function render_time_off(array $user): void
@@ -383,15 +443,34 @@ function render_time_off(array $user): void
 
 function render_payments(array $user): void
 {
-    $payments = PaymentService::list($user);
+    $statusFilter = $user['role'] === 'customer' ? null : trim((string) ($_GET['status'] ?? ''));
+    if ($statusFilter === '') $statusFilter = null;
+    $payments = PaymentService::list($user, $statusFilter);
+    if ($user['role'] === 'customer') {
+        $balance = WalletService::balance((int) $user['id']);
+        $testCard = WalletService::testCard();
+        $walletTransactions = WalletService::transactions($user); ?>
+        <section class="wallet-hero"><div><p class="eyebrow">Test cüzdanı</p><h2><?= money($balance) ?></h2><p>Bu bakiye yalnızca beta ödeme akışını denemek içindir; gerçek para hareketi oluşturmaz.</p></div><span class="badge awaiting_approval">TEST MODU</span></section>
+        <section class="grid two-col"><form method="post" class="panel card-payment form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="simulate_wallet_topup"><p class="eyebrow">Sahte kart ödemesi</p><h2>Bakiye yükle</h2><div class="test-card-hint"><strong>Onay veren test kartı</strong><code><?= e(trim(chunk_split($testCard['number'], 4, ' '))) ?></code><span>Son kullanma: <?= e($testCard['expiry']) ?> · CVV: <?= e($testCard['cvv']) ?></span></div><label>Kart üzerindeki ad<input name="cardholder" autocomplete="cc-name" required></label><label>Kart numarası<input name="card_number" inputmode="numeric" autocomplete="cc-number" maxlength="23" placeholder="0000 0000 0000 0000" data-card-number required></label><div class="form-grid compact"><label>Son kullanma<input name="expiry" inputmode="numeric" autocomplete="cc-exp" maxlength="5" placeholder="AA/YY" data-card-expiry required></label><label>CVV<input type="password" name="cvv" inputmode="numeric" autocomplete="cc-csc" maxlength="4" required></label></div><label>Yüklenecek tutar<input type="number" name="amount" min="1" max="100000" step="0.01" value="1000" required></label><button class="btn btn-primary">Test Ödemesini Onayla</button><p class="form-note">Kart numarası, son kullanma tarihi ve CVV kaydedilmez.</p></form>
+        <section class="panel"><p class="eyebrow">Bakiye hareketleri</p><h2>Test cüzdan geçmişi</h2><div class="table-wrap"><table><thead><tr><th>Tarih</th><th>Tutar</th><th>Kart</th><th>Referans</th><th>Durum</th><th>Son bakiye</th></tr></thead><tbody><?php foreach ($walletTransactions as $item): ?><tr><td><?= e(dt((string) $item['created_at'])) ?></td><td><?= money($item['amount']) ?></td><td>•••• <?= e($item['card_last_four'] ?: '----') ?></td><td><?= e($item['reference_no']) ?></td><td><span class="badge <?= $item['status'] === 'approved' ? 'paid' : 'cancelled' ?>"><?= $item['status'] === 'approved' ? 'Onaylandı' : 'Reddedildi' ?></span></td><td><?= money($item['balance_after']) ?></td></tr><?php endforeach; ?><?php if (!$walletTransactions): ?><tr><td colspan="6" class="empty">Henüz bakiye hareketi yok.</td></tr><?php endif; ?></tbody></table></div></section></section>
+        <?php
+    }
     if ($user['role'] !== 'customer' && can($user, 'payments.create')) {
         $customerPackages = DB::fetchAll(Management::customerPackageSql() . ' WHERE cp.payment_status != "paid" ORDER BY cp.id DESC');
         $singleReservations = DB::fetchAll('SELECT r.id, r.price, c.name AS customer_name, s.name AS service_name FROM reservations r INNER JOIN users c ON c.id=r.customer_id INNER JOIN services s ON s.id=r.service_id WHERE r.reservation_type="single" AND r.payment_status != "paid" ORDER BY r.id DESC'); ?>
         <section class="grid two-col"><div class="panel"><h2>Paket ödemesi kaydet</h2><?php payment_beta_notice(); ?><form method="post" class="form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="create_payment"><input type="hidden" name="target_type" value="package"><label>Paket<select name="target_id" data-payment-package><?php foreach ($customerPackages as $item): ?><option value="<?= e($item['id']) ?>" data-customer="<?= e($item['customer_id']) ?>" data-amount="<?= e($item['package_price']) ?>"><?= e($item['customer_name'] . ' · ' . $item['package_name']) ?></option><?php endforeach; ?></select></label><label>Danışan<select name="customer_id"><?php options(customers()); ?></select></label><label>Tutar<input type="number" name="amount" step="0.01" min="0.01" required></label><?php payment_method_fields(); ?><button class="btn btn-primary">Ödeme Kaydı Oluştur</button></form></div>
         <div class="panel"><h2>Tek seans ödemesi kaydet</h2><form method="post" class="form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="create_payment"><input type="hidden" name="target_type" value="reservation"><label>Rezervasyon<select name="target_id"><?php foreach ($singleReservations as $item): ?><option value="<?= e($item['id']) ?>"><?= e('#' . $item['id'] . ' · ' . $item['customer_name'] . ' · ' . $item['service_name']) ?></option><?php endforeach; ?></select></label><label>Danışan<select name="customer_id"><?php options(customers()); ?></select></label><label>Tutar<input type="number" name="amount" step="0.01" min="0.01" required></label><?php payment_method_fields(); ?><button class="btn btn-primary">Ödeme Kaydı Oluştur</button></form></div></section><?php
     }
-    $canPaymentAction = can($user, 'payments.approve') || can($user, 'payments.refund');
-    ?><section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($payments) ?> kayıt</p><h2><?= $user['role'] === 'customer' ? 'Ödeme geçmişim' : 'Ödeme hareketleri' ?></h2></div></div><div class="table-wrap"><table><thead><tr><th>Tarih</th><?php if ($user['role'] !== 'customer'): ?><th>Danışan</th><?php endif; ?><th>Tutar</th><th>Yöntem</th><th>Referans</th><th>Durum</th><?php if ($canPaymentAction): ?><th>İşlem</th><?php endif; ?></tr></thead><tbody><?php foreach ($payments as $item): ?><tr><td><?= e(dt((string) $item['created_at'])) ?></td><?php if ($user['role'] !== 'customer'): ?><td><?= e($item['customer_name']) ?></td><?php endif; ?><td><strong><?= money($item['amount'], (string) $item['currency']) ?></strong></td><td><?= e(PaymentService::METHODS[$item['method']] ?? $item['method']) ?></td><td><?= e($item['reference_no'] ?: '-') ?></td><td><span class="badge <?= e($item['status']) ?>"><?= e(PaymentService::STATUSES[$item['status']] ?? $item['status']) ?></span></td><?php if ($canPaymentAction): ?><td class="actions"><?php if (can($user, 'payments.approve') && in_array($item['status'], ['pending', 'awaiting_approval'], true)): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="approve_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-success">Onayla</button></form><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="cancel_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-danger">İptal</button></form><?php elseif (can($user, 'payments.refund') && $item['status'] === 'paid'): ?><details class="action-pop"><summary class="btn btn-small">İade</summary><form method="post" class="popover"><?= csrf_field() ?><input type="hidden" name="action" value="refund_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><input name="note" placeholder="İade nedeni" required><button class="btn btn-small btn-danger">İade Et</button></form></details><?php endif; ?></td><?php endif; ?></tr><?php endforeach; ?><?php if (!$payments): ?><tr><td colspan="7" class="empty">Ödeme kaydı yok.</td></tr><?php endif; ?></tbody></table></div></section><?php
+    $canPaymentAction = can($user, 'payments.approve') || can($user, 'payments.refund'); ?>
+    <section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($payments) ?> kayıt</p><h2><?= $user['role'] === 'customer' ? 'Ödeme geçmişim' : 'Ödeme hareketleri' ?></h2></div></div>
+    <?php if ($user['role'] !== 'customer'): ?><nav class="status-tabs"><?php foreach (['' => 'Tümü', 'awaiting_approval' => 'Onay Bekliyor', 'pending' => 'Bekleyen', 'paid' => 'Ödendi', 'refunded' => 'İade', 'cancelled' => 'İptal'] as $value => $label): $href = url_for('/admin/payments') . ($value !== '' ? '?status=' . rawurlencode((string) $value) : ''); ?><a class="<?= (string) ($statusFilter ?? '') === (string) $value ? 'active' : '' ?>" href="<?= e($href) ?>"><?= e($label) ?></a><?php endforeach; ?></nav><?php endif; ?>
+    <div class="table-wrap"><table><thead><tr><th>Tarih</th><?php if ($user['role'] !== 'customer'): ?><th>Danışan</th><?php endif; ?><th>Tutar</th><th>Yöntem</th><th>Referans</th><th>Durum</th><?php if ($canPaymentAction): ?><th>İşlem</th><?php endif; ?></tr></thead><tbody>
+    <?php foreach ($payments as $item): ?><tr><td><?= e(dt((string) $item['created_at'])) ?></td><?php if ($user['role'] !== 'customer'): ?><td><?= e($item['customer_name']) ?></td><?php endif; ?><td><strong><?= money($item['amount'], (string) $item['currency']) ?></strong></td><td><?= e(PaymentService::METHODS[$item['method']] ?? $item['method']) ?></td><td><?= e($item['reference_no'] ?: '-') ?></td><td><span class="badge <?= e($item['status']) ?>"><?= e(PaymentService::STATUSES[$item['status']] ?? $item['status']) ?></span></td>
+    <?php if ($canPaymentAction): ?><td class="actions">
+        <?php if (can($user, 'payments.approve') && in_array($item['status'], ['pending', 'awaiting_approval'], true)): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="approve_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><input type="hidden" name="return_status" value="<?= e($statusFilter ?? '') ?>"><button class="btn btn-small btn-success">Onayla</button></form><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="cancel_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><input type="hidden" name="return_status" value="<?= e($statusFilter ?? '') ?>"><button class="btn btn-small btn-danger">İptal</button></form><?php endif; ?>
+        <?php if ($item['status'] === 'paid' && can($user, 'payments.approve')): ?><details class="action-pop"><summary class="btn btn-small">Ödendiyi Geri Al</summary><form method="post" class="popover"><?= csrf_field() ?><input type="hidden" name="action" value="reopen_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><input type="hidden" name="return_status" value="<?= e($statusFilter ?? '') ?>"><input name="note" placeholder="Geri alma nedeni" required><button class="btn btn-small">Beklemeye Al</button></form></details><?php endif; ?>
+        <?php if ($item['status'] === 'paid' && can($user, 'payments.refund')): ?><details class="action-pop"><summary class="btn btn-small">İade</summary><form method="post" class="popover"><?= csrf_field() ?><input type="hidden" name="action" value="refund_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><input type="hidden" name="return_status" value="<?= e($statusFilter ?? '') ?>"><input name="note" placeholder="İade nedeni" required><button class="btn btn-small btn-danger">İade Et</button></form></details><?php endif; ?>
+    </td><?php endif; ?></tr><?php endforeach; ?><?php if (!$payments): ?><tr><td colspan="7" class="empty">Bu sekmede ödeme kaydı yok.</td></tr><?php endif; ?></tbody></table></div></section><?php
 }
 
 function payment_method_fields(): void
@@ -440,7 +519,7 @@ function render_settings(): void
 {
     $settings = Management::publicSettings(); ?>
     <section class="grid two-col"><form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="save_settings"><h2>Rezervasyon kuralları</h2><label>Değişiklik son süresi (saat)<input type="number" name="booking_change_deadline_hours" value="<?= e($settings['booking_change_deadline_hours']) ?>" min="0"></label><label>Geç iptalde hak yansın mı?<select name="late_cancel_burn_credit"><option value="1" <?= selected($settings['late_cancel_burn_credit'], '1') ?>>Evet</option><option value="0" <?= selected($settings['late_cancel_burn_credit'], '0') ?>>Hayır</option></select></label><label>Hak düşme anı<select name="credit_deduction_policy"><option value="on_booking" <?= selected($settings['credit_deduction_policy'], 'on_booking') ?>>Rezervasyon oluşturulunca</option><option value="on_attendance" <?= selected($settings['credit_deduction_policy'], 'on_attendance') ?>>Geldi / gelmedi işaretlenince</option></select></label><label>Hatırlatma (saat)<input type="number" name="reservation_reminder_hours" value="<?= e($settings['reservation_reminder_hours']) ?>" min="1"></label><button class="btn btn-primary">Kuralları Kaydet</button></form>
-    <form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="save_settings"><h2>Ödeme ayarları</h2><?php payment_beta_notice(); ?><label>Para birimi<input name="currency" value="<?= e($settings['currency']) ?>" maxlength="3"></label><label>Banka adı<input name="bank_name" value="<?= e($settings['bank_name']) ?>"></label><label>Hesap sahibi<input name="bank_account_name" value="<?= e($settings['bank_account_name']) ?>"></label><label>IBAN<input name="bank_iban" value="<?= e($settings['bank_iban']) ?>"></label><button class="btn btn-primary">Ödeme Ayarlarını Kaydet</button></form></section><?php
+    <form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="save_settings"><h2>Ödeme ayarları</h2><?php payment_beta_notice(); ?><label>Para birimi<input name="currency" value="<?= e($settings['currency']) ?>" maxlength="3"></label><label>Banka adı<input name="bank_name" value="<?= e($settings['bank_name']) ?>"></label><label>Hesap sahibi<input name="bank_account_name" value="<?= e($settings['bank_account_name']) ?>"></label><label>IBAN<input name="bank_iban" value="<?= e($settings['bank_iban']) ?>"></label><hr><h3>Test kartı</h3><p class="form-note">Danışan portalındaki sahte bakiye yüklemede yalnızca bu bilgiler onay verir.</p><label>Test kart numarası<input name="test_card_number" inputmode="numeric" value="<?= e($settings['test_card_number']) ?>" minlength="12" maxlength="19" required></label><label>Son kullanma (AA/YY)<input name="test_card_expiry" value="<?= e($settings['test_card_expiry']) ?>" maxlength="5" required></label><label>Test CVV<input name="test_card_cvv" inputmode="numeric" value="<?= e($settings['test_card_cvv']) ?>" minlength="3" maxlength="4" required></label><button class="btn btn-primary">Ödeme Ayarlarını Kaydet</button></form></section><?php
 }
 
 function render_audit_logs(): void
@@ -494,4 +573,4 @@ function status_label(string $status): string { return ['pending' => 'Bekliyor',
 function status_account_label(string $status): string { return ['active' => 'Aktif', 'pending' => 'Bekliyor', 'suspended' => 'Askıda', 'passive' => 'Pasif'][$status] ?? $status; }
 function payment_label(string $status): string { return PaymentService::STATUSES[$status] ?? $status; }
 function clinical_type_label(string $type): string { return ['assessment' => 'İlk değerlendirme', 'treatment' => 'Seans / uygulama notu', 'progress' => 'İlerleme değerlendirmesi', 'discharge' => 'Süreç sonu notu'][$type] ?? $type; }
-function user_role_options(string $current, array $actor): void { $roles = ['customer' => 'Danışan', 'consultant' => 'Fizyoterapist', 'staff' => 'Resepsiyon / Personel']; if ($actor['role'] === 'super_admin') $roles = ['super_admin' => 'Süper Yönetici', 'admin' => 'Yönetici'] + $roles; foreach ($roles as $value => $label) echo '<option value="' . e($value) . '" ' . selected($current, $value) . '>' . e($label) . '</option>'; }
+function personnel_role_options(string $current, array $actor): void { $roles = ['consultant' => 'Fizyoterapist', 'staff' => 'Resepsiyon / Personel']; if ($actor['role'] === 'super_admin') $roles = ['super_admin' => 'Süper Yönetici', 'admin' => 'Yönetici'] + $roles; foreach ($roles as $value => $label) echo '<option value="' . e($value) . '" ' . selected($current, $value) . '>' . e($label) . '</option>'; }

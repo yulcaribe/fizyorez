@@ -15,6 +15,9 @@ final class Management
             'bank_name' => setting('bank_name', ''),
             'bank_iban' => setting('bank_iban', ''),
             'bank_account_name' => setting('bank_account_name', ''),
+            'test_card_number' => setting('test_card_number', '4242424242424242'),
+            'test_card_expiry' => setting('test_card_expiry', '12/30'),
+            'test_card_cvv' => setting('test_card_cvv', '123'),
         ];
     }
 
@@ -56,6 +59,12 @@ final class Management
         } catch (Throwable $e) {
             DB::pdo()->rollBack();
             throw $e;
+        }
+
+        if ($role === 'consultant') {
+            ScheduleService::primeCalendar($id);
+        } elseif ($role === 'customer') {
+            WalletService::ensureWallet($id);
         }
 
         return (array) DB::fetch('SELECT id, role, name, email, phone, status, created_at FROM users WHERE id = ?', [$id]);
@@ -119,6 +128,11 @@ final class Management
 
         if ($role === 'consultant' && !DB::fetch('SELECT user_id FROM consultant_profiles WHERE user_id = ?', [$userId])) {
             DB::execute('INSERT INTO consultant_profiles (user_id, title, bio, color) VALUES (?, "Fizyoterapist", "", "#0f766e")', [$userId]);
+        }
+        if ($role === 'consultant') {
+            ScheduleService::primeCalendar($userId);
+        } elseif ($role === 'customer') {
+            WalletService::ensureWallet($userId);
         }
         Audit::record((int) $actor['id'], 'user.updated', 'user', $userId, ['role' => $role, 'status' => $status]);
 

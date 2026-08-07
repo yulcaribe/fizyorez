@@ -4,58 +4,165 @@ declare(strict_types=1);
 
 final class ScheduleService
 {
-    public static function availability(array $actor): array
+    public static function calendarSummaries(array $actor): array
     {
-        if ($actor['role'] === 'consultant' && !can($actor, 'schedules.view_all')) {
-            return DB::fetchAll(
-                'SELECT a.*, u.name AS consultant_name FROM consultant_availability a
-                 INNER JOIN users u ON u.id = a.consultant_id WHERE a.consultant_id = ? ORDER BY a.weekday, a.start_time',
-                [$actor['id']]
-            );
+        $consultants = self::visibleConsultants($actor);
+        foreach ($consultants as $consultant) {
+            self::ensureDefaultRange((int) $consultant['id'], new DateTimeImmutable('today'), new DateTimeImmutable('+180 days'));
         }
-        Authorization::require($actor, 'schedules.view_all');
 
+        $ids = array_map(static fn (array $item): int => (int) $item['id'], $consultants);
+        if ($ids === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
         return DB::fetchAll(
-            'SELECT a.*, u.name AS consultant_name FROM consultant_availability a
-             INNER JOIN users u ON u.id = a.consultant_id ORDER BY u.name, a.weekday, a.start_time'
+            'SELECT u.id AS consultant_id, u.name AS consultant_name,
+                    COUNT(DISTINCT CASE WHEN d.work_date >= CURDATE() AND d.is_working = 1 THEN d.work_date END) AS working_days,
+                    COUNT(CASE WHEN d.work_date >= CURDATE() AND d.is_working = 1 THEN s.id END) AS active_periods,
+                    MIN(CASE WHEN d.work_date >= CURDATE() AND d.is_working = 1 THEN d.work_date END) AS next_working_date,
+                    MAX(d.work_date) AS generated_until
+             FROM users u
+             LEFT JOIN consultant_calendar_days d ON d.consultant_id = u.id
+             LEFT JOIN consultant_calendar_slots s ON s.calendar_day_id = d.id
+             WHERE u.id IN (' . $placeholders . ')
+             GROUP BY u.id, u.name
+             ORDER BY u.name',
+            $ids
         );
     }
 
-    public static function addAvailability(array $actor, array $data): void
+    public static function calendarDays(array $actor, int $consultantId, string $from, string $to): array
+    {
+        $consultantId = self::resolveConsultantId($actor, $consultantId);
+        $start = self::normalizeDate($from);
+        $end = self::normalizeDate($to);
+        if ($start > $end || $start->diff($end)->days > 62) {
+            throw new RuntimeException('Takvim görünümü en fazla 63 günlük bir aralık olabilir.');
+        }
+
+        self::ensureDefaultRange($consultantId, $start, $end);
+        $rows = DB::fetchAll(
+            'SELECT d.id AS day_id, d.work_date, d.is_working, d.source,
+                    s.id AS slot_id, s.period, s.start_time, s.end_time
+             FROM consultant_calendar_days d
+             LEFT JOIN consultant_calendar_slots s ON s.calendar_day_id = d.id
+             WHERE d.consultant_id = ? AND d.work_date BETWEEN ? AND ?
+             ORDER BY d.work_date, s.start_time',
+            [$consultantId, $start->format('Y-m-d'), $end->format('Y-m-d')]
+        );
+
+        $days = [];
+        foreach ($rows as $row) {
+            $date = (string) $row['work_date'];
+            if (!isset($days[$date])) {
+                $days[$date] = [
+                    'day_id' => (int) $row['day_id'],
+                    'work_date' => $date,
+                    'is_working' => (int) $row['is_working'],
+                    'source' => (string) $row['source'],
+                    'slots' => [],
+                ];
+            }
+            if ($row['slot_id'] !== null) {
+                $days[$date]['slots'][] = [
+                    'id' => (int) $row['slot_id'],
+                    'period' => (string) $row['period'],
+                    'start_time' => (string) $row['start_time'],
+                    'end_time' => (string) $row['end_time'],
+                ];
+            }
+        }
+
+        return array_values($days);
+    }
+
+    public static function saveDate(array $actor, array $data): void
     {
         $consultantId = self::resolveConsultantId($actor, (int) ($data['consultant_id'] ?? 0));
-        $weekday = (int) ($data['weekday'] ?? 0);
-        $start = self::normalizeTime((string) ($data['start_time'] ?? ''));
-        $end = self::normalizeTime((string) ($data['end_time'] ?? ''));
-        if ($weekday < 1 || $weekday > 7 || $start >= $end) {
-            throw new RuntimeException('Çalışma günü veya saat aralığı geçersiz.');
+        $date = self::normalizeDate((string) ($data['work_date'] ?? ''));
+        $slots = [];
+        if (!empty($data['morning'])) {
+            $slots[] = ['morning', '09:00:00', '13:00:00'];
+        }
+        if (!empty($data['afternoon'])) {
+            $slots[] = ['afternoon', '13:00:00', '17:00:00'];
         }
 
-        $overlap = DB::fetch(
-            'SELECT id FROM consultant_availability
-             WHERE consultant_id = ? AND weekday = ? AND is_active = 1 AND start_time < ? AND end_time > ? LIMIT 1',
-            [$consultantId, $weekday, $end, $start]
-        );
-        if ($overlap) {
-            throw new RuntimeException('Bu çalışma aralığı mevcut programla çakışıyor.');
+        $customStartRaw = trim((string) ($data['custom_start'] ?? ''));
+        $customEndRaw = trim((string) ($data['custom_end'] ?? ''));
+        if ($customStartRaw !== '' || $customEndRaw !== '') {
+            if ($customStartRaw === '' || $customEndRaw === '') {
+                throw new RuntimeException('Özel saat için başlangıç ve bitiş birlikte girilmelidir.');
+            }
+            $customStart = self::normalizeTime($customStartRaw);
+            $customEnd = self::normalizeTime($customEndRaw);
+            if ($customStart >= $customEnd) {
+                throw new RuntimeException('Özel çalışma başlangıcı bitişten önce olmalıdır.');
+            }
+            $slots[] = ['custom', $customStart, $customEnd];
         }
+        self::assertSlotsDoNotOverlap($slots);
+        self::assertReservationsFit($consultantId, $date->format('Y-m-d'), $slots);
 
-        $id = DB::insert(
-            'INSERT INTO consultant_availability (consultant_id, weekday, start_time, end_time, is_active) VALUES (?, ?, ?, ?, 1)',
-            [$consultantId, $weekday, $start, $end]
-        );
-        Audit::record((int) $actor['id'], 'schedule.availability_added', 'consultant_availability', $id, ['consultant_id' => $consultantId]);
+        DB::pdo()->beginTransaction();
+        try {
+            DB::execute(
+                'INSERT INTO consultant_calendar_days (consultant_id, work_date, is_working, source, updated_by, created_at, updated_at)
+                 VALUES (?, ?, ?, "manual", ?, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE is_working = VALUES(is_working), source = "manual", updated_by = VALUES(updated_by), updated_at = NOW()',
+                [$consultantId, $date->format('Y-m-d'), $slots === [] ? 0 : 1, $actor['id']]
+            );
+            $day = DB::fetch('SELECT id FROM consultant_calendar_days WHERE consultant_id = ? AND work_date = ? FOR UPDATE', [$consultantId, $date->format('Y-m-d')]);
+            DB::execute('DELETE FROM consultant_calendar_slots WHERE calendar_day_id = ?', [$day['id']]);
+            foreach ($slots as [$period, $start, $end]) {
+                DB::insert(
+                    'INSERT INTO consultant_calendar_slots (calendar_day_id, period, start_time, end_time) VALUES (?, ?, ?, ?)',
+                    [$day['id'], $period, $start, $end]
+                );
+            }
+            Audit::record((int) $actor['id'], 'schedule.date_saved', 'consultant_calendar_day', (int) $day['id'], [
+                'consultant_id' => $consultantId,
+                'work_date' => $date->format('Y-m-d'),
+                'periods' => array_column($slots, 0),
+            ]);
+            DB::pdo()->commit();
+        } catch (Throwable $e) {
+            DB::pdo()->rollBack();
+            throw $e;
+        }
     }
 
-    public static function deleteAvailability(array $actor, int $availabilityId): void
+    public static function generateCalendar(array $actor, int $requestedId, string $from, string $to): void
     {
-        $item = DB::fetch('SELECT * FROM consultant_availability WHERE id = ?', [$availabilityId]);
-        if (!$item) {
-            throw new RuntimeException('Müsaitlik bulunamadı.');
+        $consultantId = self::resolveConsultantId($actor, $requestedId);
+        $start = self::normalizeDate($from);
+        $end = self::normalizeDate($to);
+        if ($start > $end || $start->diff($end)->days > 366) {
+            throw new RuntimeException('Takvim tek işlemde en fazla 367 gün için oluşturulabilir.');
         }
-        self::assertCanManage($actor, (int) $item['consultant_id']);
-        DB::execute('DELETE FROM consultant_availability WHERE id = ?', [$availabilityId]);
-        Audit::record((int) $actor['id'], 'schedule.availability_deleted', 'consultant_availability', $availabilityId, ['consultant_id' => $item['consultant_id']]);
+        self::ensureDefaultRange($consultantId, $start, $end);
+        Audit::record((int) $actor['id'], 'schedule.calendar_generated', 'user', $consultantId, [
+            'from' => $start->format('Y-m-d'),
+            'to' => $end->format('Y-m-d'),
+        ]);
+    }
+
+    public static function ensureDate(int $consultantId, string $date): void
+    {
+        $day = self::normalizeDate($date);
+        self::ensureDefaultRange($consultantId, $day, $day);
+    }
+
+    public static function primeCalendar(int $consultantId, int $days = 180): void
+    {
+        $days = max(1, min(367, $days));
+        self::ensureDefaultRange(
+            $consultantId,
+            new DateTimeImmutable('today'),
+            new DateTimeImmutable('today +' . $days . ' days')
+        );
     }
 
     public static function addTimeOff(array $actor, array $data): void
@@ -111,6 +218,100 @@ final class ScheduleService
         Audit::record((int) $actor['id'], 'schedule.time_off_deleted', 'consultant_time_off', $timeOffId, ['consultant_id' => $item['consultant_id']]);
     }
 
+    private static function visibleConsultants(array $actor): array
+    {
+        if ($actor['role'] === 'consultant' && !can($actor, 'schedules.view_all')) {
+            Authorization::require($actor, 'schedules.manage_own');
+            return DB::fetchAll('SELECT id, name FROM users WHERE id = ? AND role = "consultant" AND status = "active"', [$actor['id']]);
+        }
+        Authorization::require($actor, 'schedules.view_all');
+
+        return DB::fetchAll('SELECT id, name FROM users WHERE role = "consultant" AND status = "active" ORDER BY name');
+    }
+
+    private static function ensureDefaultRange(int $consultantId, DateTimeImmutable $start, DateTimeImmutable $end): void
+    {
+        $expectedDays = (int) $start->diff($end)->days + 1;
+        $existing = DB::fetch(
+            'SELECT COUNT(*) AS total FROM consultant_calendar_days
+             WHERE consultant_id = ? AND work_date BETWEEN ? AND ?',
+            [$consultantId, $start->format('Y-m-d'), $end->format('Y-m-d')]
+        );
+        if ((int) ($existing['total'] ?? 0) === $expectedDays) {
+            return;
+        }
+
+        for ($day = $start; $day <= $end; $day = $day->modify('+1 day')) {
+            $date = $day->format('Y-m-d');
+            $weekday = (int) $day->format('N');
+            $working = $weekday <= 5 ? 1 : 0;
+            $created = DB::execute(
+                'INSERT IGNORE INTO consultant_calendar_days
+                    (consultant_id, work_date, is_working, source, created_at, updated_at)
+                 VALUES (?, ?, ?, "default", NOW(), NOW())',
+                [$consultantId, $date, $working]
+            );
+            if ($created === 0 || $working === 0) {
+                continue;
+            }
+            $calendarDay = DB::fetch('SELECT id FROM consultant_calendar_days WHERE consultant_id = ? AND work_date = ?', [$consultantId, $date]);
+            DB::insert(
+                'INSERT IGNORE INTO consultant_calendar_slots (calendar_day_id, period, start_time, end_time) VALUES (?, "morning", "09:00:00", "13:00:00")',
+                [$calendarDay['id']]
+            );
+            DB::insert(
+                'INSERT IGNORE INTO consultant_calendar_slots (calendar_day_id, period, start_time, end_time) VALUES (?, "afternoon", "13:00:00", "17:00:00")',
+                [$calendarDay['id']]
+            );
+        }
+    }
+
+    private static function assertReservationsFit(int $consultantId, string $date, array $slots): void
+    {
+        $reservations = DB::fetchAll(
+            'SELECT starts_at, ends_at FROM reservations
+             WHERE consultant_id = ? AND DATE(starts_at) = ? AND status IN ("pending", "confirmed")',
+            [$consultantId, $date]
+        );
+        foreach ($reservations as $reservation) {
+            $start = (new DateTimeImmutable((string) $reservation['starts_at']))->format('H:i:s');
+            $end = (new DateTimeImmutable((string) $reservation['ends_at']))->format('H:i:s');
+            if (!self::slotsCover($slots, $start, $end)) {
+                throw new RuntimeException('Bu tarihte yeni çalışma saatlerinin dışında kalan aktif randevu var. Önce randevuyu taşıyın veya iptal edin.');
+            }
+        }
+    }
+
+    private static function slotsCover(array $slots, string $start, string $end): bool
+    {
+        usort($slots, static fn (array $a, array $b): int => strcmp($a[1], $b[1]));
+        $coveredUntil = null;
+        foreach ($slots as [, $slotStart, $slotEnd]) {
+            if ($slotStart <= $start && $slotEnd > $start) {
+                $coveredUntil = $coveredUntil === null || $slotEnd > $coveredUntil ? $slotEnd : $coveredUntil;
+            } elseif ($coveredUntil !== null && $slotStart <= $coveredUntil && $slotEnd > $coveredUntil) {
+                $coveredUntil = $slotEnd;
+            }
+            if ($coveredUntil !== null && $coveredUntil >= $end) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function assertSlotsDoNotOverlap(array $slots): void
+    {
+        usort($slots, static fn (array $a, array $b): int => strcmp($a[1], $b[1]));
+        $previousEnd = null;
+        foreach ($slots as $slot) {
+            if ($previousEnd !== null && $slot[1] < $previousEnd) {
+                throw new RuntimeException('Çalışma saatleri birbiriyle çakışamaz.');
+            }
+            $previousEnd = $slot[2];
+        }
+    }
+
     private static function resolveConsultantId(array $actor, int $requestedId): int
     {
         if ($actor['role'] === 'consultant' && can($actor, 'schedules.manage_own')) {
@@ -123,14 +324,6 @@ final class ScheduleService
         }
 
         return $requestedId;
-    }
-
-    private static function assertCanManage(array $actor, int $consultantId): void
-    {
-        if ($actor['role'] === 'consultant' && (int) $actor['id'] === $consultantId && can($actor, 'schedules.manage_own')) {
-            return;
-        }
-        Authorization::require($actor, 'schedules.manage_all');
     }
 
     private static function resolveTimeOffConsultantId(array $actor, int $requestedId): int
@@ -155,9 +348,20 @@ final class ScheduleService
         Authorization::require($actor, 'time_off.manage_all');
     }
 
+    private static function normalizeDate(string $value): DateTimeImmutable
+    {
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d', substr($value, 0, 10));
+        $errors = DateTimeImmutable::getLastErrors();
+        if (!$date || (is_array($errors) && ($errors['warning_count'] > 0 || $errors['error_count'] > 0))) {
+            throw new RuntimeException('Tarih formatı geçersiz.');
+        }
+
+        return $date;
+    }
+
     private static function normalizeTime(string $value): string
     {
-        $date = DateTimeImmutable::createFromFormat('H:i', substr($value, 0, 5));
+        $date = DateTimeImmutable::createFromFormat('!H:i', substr($value, 0, 5));
         if (!$date) {
             throw new RuntimeException('Saat formatı geçersiz.');
         }

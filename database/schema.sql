@@ -1,5 +1,5 @@
 -- FizyoRez beta - clean installation schema (MySQL 8 / MariaDB 10.4+)
--- Existing beta databases should run database/migrations/001_beta_foundation.sql instead.
+-- Existing beta databases should run database/migrations/002_wallets_date_calendars.sql instead.
 
 SET NAMES utf8mb4;
 
@@ -118,6 +118,34 @@ CREATE TABLE IF NOT EXISTS customer_packages (
     INDEX idx_customer_packages_expiry (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS customer_wallets (
+    customer_id INT UNSIGNED PRIMARY KEY,
+    balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    customer_id INT UNSIGNED NOT NULL,
+    transaction_type ENUM('topup', 'payment', 'refund', 'manual') NOT NULL DEFAULT 'topup',
+    amount DECIMAL(12,2) NOT NULL,
+    balance_before DECIMAL(12,2) NOT NULL,
+    balance_after DECIMAL(12,2) NOT NULL,
+    status ENUM('approved', 'rejected') NOT NULL,
+    provider VARCHAR(40) NOT NULL DEFAULT 'test_card',
+    reference_no VARCHAR(80) NOT NULL,
+    card_last_four CHAR(4) NULL,
+    note VARCHAR(500) NULL,
+    created_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE KEY uq_wallet_reference (reference_no),
+    INDEX idx_wallet_transactions_customer (customer_id, id),
+    INDEX idx_wallet_transactions_status (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS consultant_availability (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     consultant_id INT UNSIGNED NOT NULL,
@@ -127,6 +155,32 @@ CREATE TABLE IF NOT EXISTS consultant_availability (
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     FOREIGN KEY (consultant_id) REFERENCES users(id) ON DELETE CASCADE,
     INDEX idx_availability_consultant_weekday (consultant_id, weekday)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS consultant_calendar_days (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    consultant_id INT UNSIGNED NOT NULL,
+    work_date DATE NOT NULL,
+    is_working TINYINT(1) NOT NULL DEFAULT 0,
+    source ENUM('default', 'manual') NOT NULL DEFAULT 'default',
+    updated_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (consultant_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE KEY uq_consultant_work_date (consultant_id, work_date),
+    INDEX idx_calendar_days_date (work_date, is_working)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS consultant_calendar_slots (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    calendar_day_id BIGINT UNSIGNED NOT NULL,
+    period ENUM('morning', 'afternoon', 'custom') NOT NULL DEFAULT 'custom',
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    FOREIGN KEY (calendar_day_id) REFERENCES consultant_calendar_days(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_calendar_day_slot (calendar_day_id, start_time, end_time),
+    INDEX idx_calendar_slots_day (calendar_day_id, start_time, end_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS consultant_time_off (
@@ -394,13 +448,16 @@ SELECT 4, id FROM permissions WHERE slug IN (
 INSERT IGNORE INTO settings (setting_key, setting_value) VALUES
 ('booking_change_deadline_hours', '12'), ('late_cancel_burn_credit', '1'),
 ('credit_deduction_policy', 'on_booking'), ('reservation_reminder_hours', '24'),
-('currency', 'TRY'), ('bank_name', ''), ('bank_iban', ''), ('bank_account_name', '');
+('currency', 'TRY'), ('bank_name', ''), ('bank_iban', ''), ('bank_account_name', ''),
+('test_card_number', '4242424242424242'), ('test_card_expiry', '12/30'), ('test_card_cvv', '123');
 
 -- Beta demo accounts. Password: password (change immediately outside local test environments).
 INSERT IGNORE INTO users (id, role, name, email, phone, password_hash, status, privacy_consent_at) VALUES
-(1, 'super_admin', 'Süper Yönetici', 'admin@demo.local', '+905550000001', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'active', NOW()),
-(2, 'consultant', 'Elif Fizyoterapist', 'danisman@demo.local', '+905550000002', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'active', NOW()),
-(3, 'customer', 'Deniz Danışan', 'musteri@demo.local', '+905550000003', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'active', NOW());
+(1, 'super_admin', 'Süper Yönetici', 'admin@demo.local', '+905550000001', '$2y$10$rJ8ZFZ2VmPvfa6G1gUCeVOhCugGyNHpn3tbCrt1quL7gUvaw3YPEe', 'active', NOW()),
+(2, 'consultant', 'Elif Fizyoterapist', 'danisman@demo.local', '+905550000002', '$2y$10$rJ8ZFZ2VmPvfa6G1gUCeVOhCugGyNHpn3tbCrt1quL7gUvaw3YPEe', 'active', NOW()),
+(3, 'customer', 'Deniz Danışan', 'musteri@demo.local', '+905550000003', '$2y$10$rJ8ZFZ2VmPvfa6G1gUCeVOhCugGyNHpn3tbCrt1quL7gUvaw3YPEe', 'active', NOW());
+
+INSERT IGNORE INTO customer_wallets (customer_id, balance) VALUES (3, 0);
 
 INSERT IGNORE INTO consultant_profiles (user_id, title, bio, color, booking_deadline_hours) VALUES
 (2, 'Fizyoterapist', 'Birebir ve grup fizyoterapi seanslarını yönetir.', '#0f766e', 12);

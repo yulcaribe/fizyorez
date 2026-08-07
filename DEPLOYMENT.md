@@ -19,12 +19,20 @@ Uygulama bir alt klasördeyse `app.base_path` değerini örneğin `/fizyorez` ya
 
 ## 3. Veritabanını hazırlayın
 
-Bu sürüm beta verilerini korumayı hedeflemez. Mevcut test verileri önemli değilse eski FizyoRez tablolarını yedekleyip boş bir veritabanı oluşturun. phpMyAdmin'de sırasıyla:
+Yeni ve boş bir veritabanı kuruyorsanız phpMyAdmin'de sırasıyla:
 
 1. `database/schema.sql`
 2. Canlı yönetici hesabı gerekiyorsa `database/production-admin.sql`
 
 dosyalarını içe aktarın.
+
+Mevcut FizyoRez veritabanındaki kullanıcı, paket, ödeme ve randevuları koruyacaksanız eski tabloları silmeyin ve `schema.sql` dosyasını yeniden yüklemeyin. Yedek aldıktan sonra yalnızca şu dosyayı bir kez içe aktarın:
+
+```text
+database/migrations/002_wallets_date_calendars.sql
+```
+
+Bu yükseltme test cüzdanı ve tarih bazlı takvim tablolarını ekler; mevcut haftalık takvim kayıtlarını silmez. Yeni tarih kayıtları ilgili takvim ekranı ilk açıldığında otomatik oluşur.
 
 Demo şemasındaki hesaplar yalnızca yerel/beta test içindir ve varsayılan şifreleri `password` değeridir. İnternete açık kurulumda demo hesaplarını pasife alın ve gerçek süper yönetici şifresini hemen değiştirin.
 
@@ -36,6 +44,8 @@ Tarayıcıda `/health` adresini açın. Tüm satırlar “Hazır” olmalıdır.
 - Giriş: `/login`
 - Danışan üyeliği: `/register`
 - Beta API durumu: `/api/v1/health`
+
+Varsayılan bakiye simülasyon kartı `4242 4242 4242 4242`, son kullanma `12/30`, CVV `123` değeridir. Süper yönetici bunu Ayarlar > Ödeme ayarları bölümünden değiştirebilir. Bu akış gerçek tahsilat yapmaz ve tam kart bilgilerini veritabanına kaydetmez.
 
 ## 5. E-posta kuyruğu
 

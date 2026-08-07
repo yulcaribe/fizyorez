@@ -403,18 +403,35 @@ final class ReservationService
     {
         $start = new DateTimeImmutable($startsAt);
         $end = new DateTimeImmutable($endsAt);
-        $weekday = (int) $start->format('N');
+        if ($start->format('Y-m-d') !== $end->format('Y-m-d')) {
+            throw new RuntimeException('Rezervasyon aynı takvim günü içinde başlayıp bitmelidir.');
+        }
+        ScheduleService::ensureDate($consultantId, $start->format('Y-m-d'));
         $startTime = $start->format('H:i:s');
         $endTime = $end->format('H:i:s');
 
-        $available = DB::fetch(
-            'SELECT id FROM consultant_availability
-             WHERE consultant_id = ? AND weekday = ? AND is_active = 1
-             AND start_time <= ? AND end_time >= ?
-             LIMIT 1',
-            [$consultantId, $weekday, $startTime, $endTime]
+        $availableSlots = DB::fetchAll(
+            'SELECT s.start_time, s.end_time
+             FROM consultant_calendar_days d
+             INNER JOIN consultant_calendar_slots s ON s.calendar_day_id = d.id
+             WHERE d.consultant_id = ? AND d.work_date = ? AND d.is_working = 1
+             ORDER BY s.start_time',
+            [$consultantId, $start->format('Y-m-d')]
         );
-        if (!$available) {
+        $coveredUntil = null;
+        foreach ($availableSlots as $slot) {
+            $slotStart = (string) $slot['start_time'];
+            $slotEnd = (string) $slot['end_time'];
+            if ($slotStart <= $startTime && $slotEnd > $startTime) {
+                $coveredUntil = $coveredUntil === null || $slotEnd > $coveredUntil ? $slotEnd : $coveredUntil;
+            } elseif ($coveredUntil !== null && $slotStart <= $coveredUntil && $slotEnd > $coveredUntil) {
+                $coveredUntil = $slotEnd;
+            }
+            if ($coveredUntil !== null && $coveredUntil >= $endTime) {
+                break;
+            }
+        }
+        if ($coveredUntil === null || $coveredUntil < $endTime) {
             throw new RuntimeException('Fizyoterapist bu saat aralığında müsait değil.');
         }
 

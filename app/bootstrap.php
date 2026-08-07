@@ -26,6 +26,7 @@ if (PHP_SAPI !== 'cli' && !headers_sent()) {
 require_once BASE_PATH . '/app/audit.php';
 require_once BASE_PATH . '/app/authorization.php';
 require_once BASE_PATH . '/app/credit_ledger.php';
+require_once BASE_PATH . '/app/wallets.php';
 require_once BASE_PATH . '/app/payments.php';
 require_once BASE_PATH . '/app/schedules.php';
 require_once BASE_PATH . '/app/clinical.php';

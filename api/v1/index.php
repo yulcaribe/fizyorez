@@ -155,7 +155,7 @@ try {
 
     if ($resource === 'payments') {
         if ($method === 'GET') {
-            ApiResponse::ok(['payments' => PaymentService::list($user)]);
+            ApiResponse::ok(['payments' => PaymentService::list($user, isset($_GET['status']) ? (string) $_GET['status'] : null)]);
         }
         if ($method === 'POST' && $id === null) {
             ApiResponse::ok(['payment' => PaymentService::create($user, $body)]);
@@ -169,19 +169,50 @@ try {
         if ($id && $operation === 'refund' && $method === 'POST') {
             ApiResponse::ok(['payment' => PaymentService::refund($user, $id, (string) ($body['note'] ?? ''))]);
         }
+        if ($id && $operation === 'reopen' && $method === 'POST') {
+            ApiResponse::ok(['payment' => PaymentService::reopen($user, $id, (string) ($body['note'] ?? ''))]);
+        }
     }
 
     if ($resource === 'availability') {
         if ($method === 'GET') {
-            ApiResponse::ok(['availability' => ScheduleService::availability($user)]);
+            if ($id) {
+                ApiResponse::ok(['days' => ScheduleService::calendarDays(
+                    $user,
+                    $id,
+                    (string) ($_GET['from'] ?? date('Y-m-d')),
+                    (string) ($_GET['to'] ?? date('Y-m-d', strtotime('+30 days')))
+                )]);
+            }
+            ApiResponse::ok(['consultants' => ScheduleService::calendarSummaries($user)]);
         }
-        if ($method === 'POST') {
-            ScheduleService::addAvailability($user, $body);
+        if ($method === 'POST' && $operation === '') {
+            ScheduleService::saveDate($user, $body);
             ApiResponse::ok();
         }
-        if ($id && $method === 'DELETE') {
-            ScheduleService::deleteAvailability($user, $id);
+        if ($id && $operation === 'generate' && $method === 'POST') {
+            ScheduleService::generateCalendar(
+                $user,
+                $id,
+                (string) ($body['from_date'] ?? date('Y-m-d')),
+                (string) ($body['to_date'] ?? date('Y-m-d', strtotime('+180 days')))
+            );
             ApiResponse::ok();
+        }
+    }
+
+    if ($resource === 'wallet') {
+        if ($method === 'GET') {
+            $walletCustomerId = $user['role'] === 'customer' ? (int) $user['id'] : (int) ($_GET['customer_id'] ?? 0);
+            if ($user['role'] !== 'customer') Authorization::require($user, 'payments.view_all');
+            if ($walletCustomerId < 1) ApiResponse::error('customer_id zorunludur.', 422);
+            ApiResponse::ok([
+                'balance' => WalletService::balance($walletCustomerId),
+                'transactions' => WalletService::transactions($user, $walletCustomerId),
+            ]);
+        }
+        if (($segments[1] ?? '') === 'top-up-test' && $method === 'POST') {
+            ApiResponse::ok(['top_up' => WalletService::simulateTopUp($user, $body)]);
         }
     }
 
@@ -218,7 +249,7 @@ try {
             ApiResponse::ok(['settings' => Management::publicSettings()]);
         }
         if (in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
-            foreach (['booking_change_deadline_hours', 'late_cancel_burn_credit', 'credit_deduction_policy', 'reservation_reminder_hours', 'currency', 'bank_name', 'bank_iban', 'bank_account_name'] as $key) {
+            foreach (['booking_change_deadline_hours', 'late_cancel_burn_credit', 'credit_deduction_policy', 'reservation_reminder_hours', 'currency', 'bank_name', 'bank_iban', 'bank_account_name', 'test_card_number', 'test_card_expiry', 'test_card_cvv'] as $key) {
                 if (array_key_exists($key, $body)) {
                     save_setting($key, trim((string) $body[$key]));
                 }

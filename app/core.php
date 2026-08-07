@@ -142,7 +142,7 @@ function friendly_error_message(Throwable $e): string
     $message = $e->getMessage();
 
     if (str_contains($message, 'SQLSTATE[42S02]') || str_contains($message, 'Base table or view not found')) {
-        return 'Veritabani semasi eksik. Hosting panelinden database/schema.sql dosyasini MySQL veritabanina aktarip tekrar deneyin.';
+        return 'Veritabanı şeması eksik. Yeni kurulumda database/schema.sql, mevcut kurulumda database/migrations/002_wallets_date_calendars.sql dosyasını içe aktarın.';
     }
 
     if (str_contains($message, 'SQLSTATE[HY000] [1049]') || str_contains($message, 'Unknown database')) {
@@ -201,7 +201,11 @@ function setup_checks(): array
             'services',
             'packages',
             'customer_packages',
+            'customer_wallets',
+            'wallet_transactions',
             'consultant_availability',
+            'consultant_calendar_days',
+            'consultant_calendar_slots',
             'consultant_time_off',
             'reservations',
             'mail_queue',
@@ -391,6 +395,8 @@ final class Auth
             DB::pdo()->rollBack();
             throw $e;
         }
+
+        WalletService::ensureWallet($id);
 
         return self::sanitizeUser((array) DB::fetch('SELECT * FROM users WHERE id = ?', [$id]));
     }

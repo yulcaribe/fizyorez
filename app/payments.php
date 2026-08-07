@@ -20,16 +20,24 @@ final class PaymentService
         'refunded' => 'İade',
     ];
 
-    public static function list(array $actor): array
+    public static function list(array $actor, ?string $status = null): array
     {
-        $where = '';
+        $conditions = [];
         $params = [];
         if ($actor['role'] === 'customer') {
-            $where = 'WHERE p.customer_id = ?';
+            $conditions[] = 'p.customer_id = ?';
             $params[] = $actor['id'];
         } else {
             Authorization::require($actor, 'payments.view_all');
         }
+        if ($status !== null && $status !== '') {
+            if (!isset(self::STATUSES[$status])) {
+                throw new RuntimeException('Ödeme durum filtresi geçersiz.');
+            }
+            $conditions[] = 'p.status = ?';
+            $params[] = $status;
+        }
+        $where = $conditions === [] ? '' : 'WHERE ' . implode(' AND ', $conditions);
 
         return DB::fetchAll(
             'SELECT p.*, u.name AS customer_name, creator.name AS created_by_name, approver.name AS approved_by_name
@@ -151,6 +159,46 @@ final class PaymentService
             self::syncTargetStatus($payment, 'refunded');
             self::event($paymentId, 'paid', 'refunded', trim($note), (int) $actor['id']);
             Audit::record((int) $actor['id'], 'payment.refunded', 'payment', $paymentId, ['reason' => trim($note)]);
+            DB::pdo()->commit();
+        } catch (Throwable $e) {
+            DB::pdo()->rollBack();
+            throw $e;
+        }
+
+        return self::find($paymentId);
+    }
+
+    public static function reopen(array $actor, int $paymentId, string $note): array
+    {
+        Authorization::require($actor, 'payments.approve');
+        $note = trim($note);
+        if ($note === '') {
+            throw new RuntimeException('Ödendi işaretini geri alma nedeni zorunludur.');
+        }
+
+        DB::pdo()->beginTransaction();
+        try {
+            $payment = DB::fetch('SELECT * FROM payments WHERE id = ? FOR UPDATE', [$paymentId]);
+            if (!$payment || $payment['status'] !== 'paid') {
+                throw new RuntimeException('Yalnızca ödendi durumundaki kayıt yeniden beklemeye alınabilir.');
+            }
+
+            $targetTable = $payment['target_type'] === 'package' ? 'customer_packages' : 'reservations';
+            $target = DB::fetch('SELECT id FROM ' . $targetTable . ' WHERE id = ? FOR UPDATE', [$payment['target_id']]);
+            if (!$target) {
+                throw new RuntimeException('Ödeme hedefi bulunamadı.');
+            }
+
+            DB::execute(
+                'UPDATE payments
+                 SET status = "pending", approved_by = NULL, approved_at = NULL,
+                     note = CONCAT_WS(" | ", NULLIF(note, ""), ?), updated_at = NOW()
+                 WHERE id = ?',
+                ['Ödendi işareti geri alındı: ' . $note, $paymentId]
+            );
+            self::syncTargetStatus($payment, 'pending');
+            self::event($paymentId, 'paid', 'pending', 'Ödendi işareti geri alındı: ' . $note, (int) $actor['id']);
+            Audit::record((int) $actor['id'], 'payment.reopened', 'payment', $paymentId, ['reason' => $note]);
             DB::pdo()->commit();
         } catch (Throwable $e) {
             DB::pdo()->rollBack();

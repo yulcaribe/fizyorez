@@ -31,3 +31,17 @@ document.querySelectorAll('[data-payment-package]').forEach((select) => {
     select.addEventListener('change', sync);
     sync();
 });
+
+document.querySelectorAll('[data-card-number]').forEach((input) => {
+    input.addEventListener('input', () => {
+        const digits = input.value.replace(/\D/g, '').slice(0, 19);
+        input.value = digits.replace(/(.{4})/g, '$1 ').trim();
+    });
+});
+
+document.querySelectorAll('[data-card-expiry]').forEach((input) => {
+    input.addEventListener('input', () => {
+        const digits = input.value.replace(/\D/g, '').slice(0, 4);
+        input.value = digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
+    });
+});
