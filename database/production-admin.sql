@@ -5,7 +5,7 @@
 INSERT INTO users (id, role, name, email, phone, password_hash, status)
 VALUES (
     1,
-    'admin',
+    'super_admin',
     'YulCaribe Admin',
     'admin@yulcaribe.com',
     NULL,

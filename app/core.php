@@ -42,6 +42,8 @@ function app_base_path(): string
     $scriptName = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? ''));
     if (str_ends_with($scriptName, '/api/v1/index.php')) {
         $scriptDir = dirname(dirname(dirname($scriptName)));
+    } elseif (str_ends_with($scriptName, '/admin/index.php')) {
+        $scriptDir = dirname(dirname($scriptName));
     } elseif (str_ends_with($scriptName, '/index.php')) {
         $scriptDir = dirname($scriptName);
     } else {
@@ -155,6 +157,10 @@ function friendly_error_message(Throwable $e): string
         return 'pdo_mysql PHP eklentisi aktif degil. Hosting PHP 8.2 ayarlarindan PDO MySQL eklentisini acin.';
     }
 
+    if (str_contains($message, 'SQLSTATE[HY000] [2002]')) {
+        return 'Veritabanı sunucusuna ulaşılamadı. db.host değerini ve hosting MySQL servisinin açık olduğunu kontrol edin.';
+    }
+
     return $message;
 }
 
@@ -176,6 +182,11 @@ function setup_checks(): array
             'ok' => extension_loaded('session'),
             'detail' => extension_loaded('session') ? 'Aktif' : 'Kapali',
         ],
+        [
+            'label' => 'Mbstring',
+            'ok' => extension_loaded('mbstring'),
+            'detail' => extension_loaded('mbstring') ? 'Aktif' : 'Kapali',
+        ],
     ];
 
     try {
@@ -194,6 +205,18 @@ function setup_checks(): array
             'consultant_time_off',
             'reservations',
             'mail_queue',
+            'roles',
+            'permissions',
+            'role_permissions',
+            'credit_transactions',
+            'payments',
+            'payment_events',
+            'audit_logs',
+            'clinical_notes',
+            'patient_history',
+            'exercise_library',
+            'exercise_programs',
+            'exercise_program_items',
         ];
         $rows = DB::fetchAll('SHOW TABLES');
         $tables = array_map(static fn (array $row): string => (string) reset($row), $rows);
@@ -205,6 +228,13 @@ function setup_checks(): array
         ];
 
         if ($missingTables === []) {
+            $roleColumn = DB::fetch("SHOW COLUMNS FROM users LIKE 'role'");
+            $modernRoleSchema = $roleColumn && str_contains((string) ($roleColumn['Type'] ?? ''), 'super_admin') && str_contains((string) ($roleColumn['Type'] ?? ''), 'staff');
+            $checks[] = [
+                'label' => 'Beta yetki şeması',
+                'ok' => (bool) $modernRoleSchema,
+                'detail' => $modernRoleSchema ? 'Rol bazlı yeni şema aktif' : 'Eski users.role yapısı bulundu; temiz beta şemasını içe aktarın',
+            ];
             $userCount = DB::fetch('SELECT COUNT(*) AS total FROM users WHERE status = "active"');
             $checks[] = [
                 'label' => 'Aktif kullanici',
@@ -312,15 +342,84 @@ final class Auth
 {
     public static function attempt(string $email, string $password): ?array
     {
-        $user = DB::fetch('SELECT * FROM users WHERE email = ? AND status = "active" LIMIT 1', [trim($email)]);
+        $email = strtolower(trim($email));
+        $user = DB::fetch('SELECT * FROM users WHERE email = ? AND status = "active" LIMIT 1', [$email]);
         if (!$user || !password_verify($password, (string) $user['password_hash'])) {
             return null;
         }
 
+        session_regenerate_id(true);
         $_SESSION['user_id'] = (int) $user['id'];
         DB::execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [$user['id']]);
+        Audit::record((int) $user['id'], 'auth.login', 'user', (int) $user['id']);
 
         return self::sanitizeUser($user);
+    }
+
+    public static function registerCustomer(array $data): array
+    {
+        if (!(bool) config('registration.enabled', true)) {
+            throw new RuntimeException('Yeni üyelik alımı şu anda kapalı.');
+        }
+
+        $name = trim((string) ($data['name'] ?? ''));
+        $email = strtolower(trim((string) ($data['email'] ?? '')));
+        $phone = trim((string) ($data['phone'] ?? ''));
+        $password = (string) ($data['password'] ?? '');
+        if (mb_strlen($name) < 3 || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new RuntimeException('Ad soyad ve geçerli e-posta adresi zorunludur.');
+        }
+        if (strlen($password) < 8 || $password !== (string) ($data['password_confirmation'] ?? '')) {
+            throw new RuntimeException('Şifre en az 8 karakter olmalı ve tekrarıyla eşleşmelidir.');
+        }
+        if (empty($data['privacy_consent'])) {
+            throw new RuntimeException('Üyelik için gizlilik ve veri işleme onayı zorunludur.');
+        }
+        if (DB::fetch('SELECT id FROM users WHERE email = ? LIMIT 1', [$email])) {
+            throw new RuntimeException('Bu e-posta adresiyle kayıtlı bir hesap var.');
+        }
+
+        DB::pdo()->beginTransaction();
+        try {
+            $id = DB::insert(
+                'INSERT INTO users (role, name, email, phone, password_hash, status, privacy_consent_at, created_at) VALUES ("customer", ?, ?, ?, ?, "active", NOW(), NOW())',
+                [$name, $email, $phone, password_hash($password, PASSWORD_DEFAULT)]
+            );
+            Audit::record($id, 'customer.registered', 'user', $id);
+            DB::pdo()->commit();
+        } catch (Throwable $e) {
+            DB::pdo()->rollBack();
+            throw $e;
+        }
+
+        return self::sanitizeUser((array) DB::fetch('SELECT * FROM users WHERE id = ?', [$id]));
+    }
+
+    public static function updateOwnProfile(array $actor, array $data): array
+    {
+        $name = trim((string) ($data['name'] ?? ''));
+        $phone = trim((string) ($data['phone'] ?? ''));
+        if (mb_strlen($name) < 3) {
+            throw new RuntimeException('Ad soyad en az 3 karakter olmalıdır.');
+        }
+        DB::execute('UPDATE users SET name = ?, phone = ? WHERE id = ?', [$name, $phone, $actor['id']]);
+        Audit::record((int) $actor['id'], 'user.profile_updated', 'user', (int) $actor['id']);
+
+        return self::sanitizeUser((array) DB::fetch('SELECT * FROM users WHERE id = ?', [$actor['id']]));
+    }
+
+    public static function changePassword(array $actor, array $data): void
+    {
+        $user = DB::fetch('SELECT password_hash FROM users WHERE id = ?', [$actor['id']]);
+        if (!$user || !password_verify((string) ($data['current_password'] ?? ''), (string) $user['password_hash'])) {
+            throw new RuntimeException('Mevcut şifre doğru değil.');
+        }
+        $password = (string) ($data['new_password'] ?? '');
+        if (strlen($password) < 8 || $password !== (string) ($data['new_password_confirmation'] ?? '')) {
+            throw new RuntimeException('Yeni şifre en az 8 karakter olmalı ve tekrarıyla eşleşmelidir.');
+        }
+        DB::execute('UPDATE users SET password_hash = ? WHERE id = ?', [password_hash($password, PASSWORD_DEFAULT), $actor['id']]);
+        Audit::record((int) $actor['id'], 'user.password_changed', 'user', (int) $actor['id']);
     }
 
     public static function currentUser(): ?array
@@ -377,12 +476,12 @@ final class Auth
     {
         $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
         if (!preg_match('/Bearer\s+(.+)/i', $header, $matches)) {
-            return self::currentUser();
+            return null;
         }
 
         $hash = hash('sha256', trim($matches[1]) . (string) config('security.token_secret'));
         $token = DB::fetch(
-            'SELECT t.*, u.* FROM api_tokens t INNER JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.expires_at > NOW() AND u.status = "active" LIMIT 1',
+            'SELECT t.id AS api_token_id, u.* FROM api_tokens t INNER JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.expires_at > NOW() AND u.status = "active" LIMIT 1',
             [$hash]
         );
 
@@ -390,9 +489,20 @@ final class Auth
             return null;
         }
 
-        DB::execute('UPDATE api_tokens SET last_used_at = NOW() WHERE id = ?', [$token['id']]);
+        DB::execute('UPDATE api_tokens SET last_used_at = NOW() WHERE id = ?', [$token['api_token_id']]);
+        unset($token['api_token_id']);
 
         return self::sanitizeUser($token);
+    }
+
+    public static function revokeCurrentApiToken(): void
+    {
+        $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+        if (!preg_match('/Bearer\s+(.+)/i', $header, $matches)) {
+            return;
+        }
+        $hash = hash('sha256', trim($matches[1]) . (string) config('security.token_secret'));
+        DB::execute('DELETE FROM api_tokens WHERE token_hash = ?', [$hash]);
     }
 
     public static function requireApi(array $roles = []): array
@@ -418,15 +528,15 @@ final class Auth
 
 function setting(string $key, mixed $default = null): mixed
 {
-    static $cache = [];
+    $cache = $GLOBALS['_fizyorez_setting_cache'] ?? [];
     if (array_key_exists($key, $cache)) {
         return $cache[$key];
     }
 
     $row = DB::fetch('SELECT setting_value FROM settings WHERE setting_key = ?', [$key]);
-    $cache[$key] = $row ? $row['setting_value'] : $default;
+    $GLOBALS['_fizyorez_setting_cache'][$key] = $row ? $row['setting_value'] : $default;
 
-    return $cache[$key];
+    return $GLOBALS['_fizyorez_setting_cache'][$key];
 }
 
 function save_setting(string $key, string $value): void
@@ -435,6 +545,7 @@ function save_setting(string $key, string $value): void
         'INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)',
         [$key, $value]
     );
+    unset($GLOBALS['_fizyorez_setting_cache'][$key]);
 }
 
 function user_label(?array $user): string

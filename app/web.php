@@ -1,0 +1,497 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/bootstrap.php';
+
+$path = current_path();
+$flash = $_SESSION['flash'] ?? null;
+unset($_SESSION['flash']);
+
+try {
+    if (in_array($path, ['/health', '/setup-check'], true)) {
+        render_health();
+        exit;
+    }
+
+    if ($path === '/register') {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+            verify_csrf();
+            Auth::registerCustomer($_POST);
+            $user = Auth::attempt((string) $_POST['email'], (string) $_POST['password']);
+            if (!$user) {
+                throw new RuntimeException('Hesap oluşturuldu ancak otomatik giriş yapılamadı.');
+            }
+            flash('success', 'Hoş geldiniz. Üyeliğiniz oluşturuldu.');
+            redirect_to('/customer');
+        }
+        render_register($flash);
+        exit;
+    }
+
+    if ($path === '/login') {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+            verify_csrf();
+            $user = Auth::attempt((string) ($_POST['email'] ?? ''), (string) ($_POST['password'] ?? ''));
+            if (!$user) {
+                flash('error', 'E-posta veya şifre hatalı.');
+                redirect_to('/login');
+            }
+            redirect_to(role_home((string) $user['role']));
+        }
+        render_login($flash);
+        exit;
+    }
+
+    if ($path === '/logout') {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+            redirect_to('/login');
+        }
+        verify_csrf();
+        Auth::logout();
+        redirect_to('/login');
+    }
+
+    $user = Auth::requireWeb();
+    if (str_starts_with($path, '/consultant')) {
+        redirect_to('/admin' . substr($path, strlen('/consultant')));
+    }
+    if ($path === '/' || $path === '/index.php') {
+        redirect_to(role_home((string) $user['role']));
+    }
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+        handle_web_action($user, $path);
+    }
+
+    render_page($user, $path, $flash);
+} catch (Throwable $e) {
+    http_response_code(500);
+    render_error($e);
+}
+
+function flash(string $type, string $message): void
+{
+    $_SESSION['flash'] = ['type' => $type, 'message' => $message];
+}
+
+function role_home(string $role): string
+{
+    return $role === 'customer' ? '/customer' : '/admin';
+}
+
+function handle_web_action(array $user, string $path): never
+{
+    verify_csrf();
+    try {
+        switch ((string) ($_POST['action'] ?? '')) {
+            case 'create_user': Management::createUser($user, $_POST); break;
+            case 'update_user': Management::updateUser($user, (int) $_POST['user_id'], $_POST); break;
+            case 'create_service': Management::saveService($user, null, $_POST); break;
+            case 'create_package': Management::savePackage($user, null, $_POST); break;
+            case 'assign_package': Management::assignPackage($user, $_POST); break;
+            case 'adjust_credit': CreditLedger::adjust($user, (int) $_POST['customer_package_id'], (int) $_POST['amount'], (string) ($_POST['note'] ?? '')); break;
+            case 'save_settings': save_settings_action($user); break;
+            case 'save_role_permissions': Authorization::saveRolePermissions($user, (int) $_POST['role_id'], (array) ($_POST['permission_ids'] ?? [])); break;
+            case 'create_reservation': ReservationService::create($user, $_POST); break;
+            case 'cancel_reservation': ReservationService::cancel($user, (int) $_POST['reservation_id']); break;
+            case 'reschedule_reservation': ReservationService::reschedule($user, (int) $_POST['reservation_id'], (string) $_POST['starts_at']); break;
+            case 'set_reservation_status': ReservationService::setStatus($user, (int) $_POST['reservation_id'], (string) $_POST['status']); break;
+            case 'add_availability': ScheduleService::addAvailability($user, $_POST); break;
+            case 'delete_availability': ScheduleService::deleteAvailability($user, (int) $_POST['availability_id']); break;
+            case 'add_time_off': ScheduleService::addTimeOff($user, $_POST); break;
+            case 'delete_time_off': ScheduleService::deleteTimeOff($user, (int) $_POST['time_off_id']); break;
+            case 'create_payment': PaymentService::create($user, $_POST); break;
+            case 'approve_payment': PaymentService::approve($user, (int) $_POST['payment_id']); break;
+            case 'cancel_payment': PaymentService::cancel($user, (int) $_POST['payment_id']); break;
+            case 'refund_payment': PaymentService::refund($user, (int) $_POST['payment_id'], (string) ($_POST['note'] ?? '')); break;
+            case 'update_profile': Auth::updateOwnProfile($user, $_POST); break;
+            case 'change_password': Auth::changePassword($user, $_POST); break;
+            case 'create_clinical_note': ClinicalService::createNote($user, $_POST); break;
+            case 'add_patient_history': ClinicalService::addHistory($user, $_POST); break;
+            case 'create_exercise': ClinicalService::createExercise($user, $_POST); break;
+            case 'create_exercise_program': ClinicalService::createProgram($user, $_POST); break;
+            case 'add_exercise_program_item': ClinicalService::addProgramItem($user, $_POST); break;
+            default: throw new RuntimeException('İşlem bulunamadı.');
+        }
+        flash('success', 'İşlem başarıyla tamamlandı.');
+    } catch (Throwable $e) {
+        flash('error', friendly_error_message($e));
+    }
+    redirect_to($path);
+}
+
+function save_settings_action(array $user): void
+{
+    Authorization::require($user, 'settings.manage');
+    $allowed = [
+        'booking_change_deadline_hours', 'late_cancel_burn_credit', 'credit_deduction_policy',
+        'reservation_reminder_hours', 'currency', 'bank_name', 'bank_iban', 'bank_account_name',
+    ];
+    foreach ($allowed as $key) {
+        if (array_key_exists($key, $_POST)) {
+            save_setting($key, trim((string) $_POST[$key]));
+        }
+    }
+    Audit::record((int) $user['id'], 'settings.updated', 'settings');
+}
+
+function render_health(): void
+{
+    $checks = setup_checks();
+    $allOk = !in_array(false, array_column($checks, 'ok'), true);
+    ?>
+    <!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kurulum Kontrolü · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css')) ?>"></head>
+    <body class="auth-page"><main class="auth-card wide"><div class="brand-mark">FR</div><h1>Kurulum kontrolü</h1>
+    <p class="muted"><?= $allOk ? 'Sistem çalışmaya hazır.' : 'Aşağıdaki eksikleri giderip tekrar deneyin.' ?></p>
+    <div class="table-wrap"><table><thead><tr><th>Kontrol</th><th>Durum</th><th>Detay</th></tr></thead><tbody>
+    <?php foreach ($checks as $check): ?><tr><td><?= e($check['label']) ?></td><td><span class="badge <?= $check['ok'] ? 'completed' : 'cancelled' ?>"><?= $check['ok'] ? 'Hazır' : 'Hata' ?></span></td><td><?= e($check['detail']) ?></td></tr><?php endforeach; ?>
+    </tbody></table></div><a class="btn btn-primary" href="<?= e(url_for('/login')) ?>">Girişe dön</a></main></body></html>
+    <?php
+}
+
+function render_login(?array $flash): void
+{
+    render_auth_start('Giriş Yap'); ?>
+    <main class="auth-shell">
+        <section class="auth-hero"><div class="brand-mark">FR</div><p class="eyebrow">Fizyoterapi yönetimi</p><h1>Danışan takibi artık daha düzenli.</h1><p>Seans, paket, hak ve ekip takvimini tek güvenli çalışma alanında yönetin.</p></section>
+        <form method="post" class="auth-card"><?= csrf_field() ?><h2>Hesabınıza giriş yapın</h2><?php render_flash($flash); ?>
+            <label>E-posta<input type="email" name="email" autocomplete="email" required></label>
+            <label>Şifre<input type="password" name="password" autocomplete="current-password" required></label>
+            <button class="btn btn-primary btn-block">Giriş Yap</button>
+            <?php if ((bool) config('registration.enabled', true)): ?><p class="auth-link">Danışan mısınız? <a href="<?= e(url_for('/register')) ?>">Ücretsiz hesap oluşturun</a></p><?php endif; ?>
+        </form>
+    </main></body></html>
+    <?php
+}
+
+function render_register(?array $flash): void
+{
+    render_auth_start('Danışan Üyeliği'); ?>
+    <main class="auth-shell">
+        <section class="auth-hero"><div class="brand-mark">FR</div><p class="eyebrow">Danışan hesabı</p><h1>Randevularınız ve paketleriniz yanınızda.</h1><p>Kendi hesabınızı oluşturun; fizyoterapist ve personel hesapları kurum tarafından açılır.</p></section>
+        <form method="post" class="auth-card"><?= csrf_field() ?><h2>Yeni hesap oluştur</h2><?php render_flash($flash); ?>
+            <label>Ad soyad<input name="name" autocomplete="name" required></label><label>E-posta<input type="email" name="email" autocomplete="email" required></label>
+            <label>Telefon<input name="phone" autocomplete="tel"></label><label>Şifre<input type="password" name="password" minlength="8" autocomplete="new-password" required></label>
+            <label>Şifre tekrarı<input type="password" name="password_confirmation" minlength="8" autocomplete="new-password" required></label>
+            <label class="check-label"><input type="checkbox" name="privacy_consent" value="1" required><span>Üyelik verilerimin hizmetin sunulması amacıyla işlenmesini kabul ediyorum.</span></label>
+            <button class="btn btn-primary btn-block">Hesabımı Oluştur</button><p class="auth-link">Zaten hesabınız var mı? <a href="<?= e(url_for('/login')) ?>">Giriş yapın</a></p>
+        </form>
+    </main></body></html>
+    <?php
+}
+
+function render_auth_start(string $title): void
+{
+    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css')) ?>"></head><body class="auth-page"><?php
+}
+
+function render_page(array $user, string $path, ?array $flash): void
+{
+    assert_role_path($user, $path);
+    $title = page_title($path);
+    ?>
+    <!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><?= e($title) ?> · <?= e(config('app.name')) ?></title><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css')) ?>"></head><body>
+    <div class="app-shell"><aside class="sidebar" id="sidebar"><a href="<?= e(url_for(role_home((string) $user['role']))) ?>" class="brand"><span class="brand-mark">FR</span><span><strong><?= e(config('app.name')) ?></strong><small>Beta</small></span></a><nav class="nav"><?= nav_links($user, $path) ?></nav></aside>
+    <div class="main-shell"><header class="topbar"><button type="button" class="menu-button" data-menu aria-label="Menüyü aç">☰</button><div><p class="eyebrow"><?= e(role_label((string) $user['role'])) ?></p><h1><?= e($title) ?></h1></div><div class="user-box"><span><strong><?= e($user['name']) ?></strong><small><?= e($user['email']) ?></small></span><form method="post" action="<?= e(url_for('/logout')) ?>"><?= csrf_field() ?><button class="btn btn-ghost">Çıkış</button></form></div></header>
+    <?php render_flash($flash); ?><main class="content"><?php render_route($user, $path); ?></main></div></div>
+    <script src="<?= e(asset_url('assets/js/app.js')) ?>"></script></body></html>
+    <?php
+}
+
+function assert_role_path(array $user, string $path): void
+{
+    $prefix = role_home((string) $user['role']);
+    if ($path !== $prefix && !str_starts_with($path, $prefix . '/')) {
+        redirect_to($prefix);
+    }
+}
+
+function page_title(string $path): string
+{
+    return [
+        '/admin' => 'Genel Bakış', '/admin/users' => 'Kullanıcı Yönetimi', '/admin/roles' => 'Rol ve Yetkiler',
+        '/admin/services' => 'Hizmetler', '/admin/packages' => 'Paket ve Haklar', '/admin/reservations' => 'Rezervasyonlar',
+        '/admin/availability' => 'Çalışma Günleri', '/admin/time-off' => 'İzin ve Molalar', '/admin/payments' => 'Ödemeler',
+        '/admin/reports' => 'Raporlar', '/admin/settings' => 'Sistem Ayarları', '/admin/profile' => 'Profilim',
+        '/admin/clinical' => 'Fizyoterapi Kayıtları', '/admin/exercises' => 'Egzersiz Programları',
+        '/admin/audit' => 'İşlem Kayıtları',
+        '/customer' => 'Ana Sayfa', '/customer/book' => 'Randevu Al', '/customer/reservations' => 'Randevularım',
+        '/customer/packages' => 'Paketlerim', '/customer/payments' => 'Ödemelerim', '/customer/profile' => 'Profilim',
+        '/customer/programs' => 'Egzersiz Programım',
+    ][$path] ?? 'FizyoRez';
+}
+
+function role_label(string $role): string
+{
+    return ['super_admin' => 'Süper Yönetici', 'admin' => 'Yönetici', 'staff' => 'Resepsiyon / Personel', 'consultant' => 'Fizyoterapist', 'customer' => 'Danışan Portalı'][$role] ?? $role;
+}
+
+function nav_links(array $user, string $path): string
+{
+    if ($user['role'] === 'customer') {
+        $links = ['/customer' => 'Ana Sayfa', '/customer/book' => 'Randevu Al', '/customer/reservations' => 'Randevularım', '/customer/packages' => 'Paketlerim', '/customer/programs' => 'Egzersiz Programım', '/customer/payments' => 'Ödemelerim', '/customer/profile' => 'Profilim'];
+    } else {
+        $links = ['/admin' => 'Genel Bakış'];
+        if (can($user, 'reservations.view_all') || can($user, 'reservations.manage_own')) $links['/admin/reservations'] = 'Rezervasyonlar';
+        if (can($user, 'users.view')) $links['/admin/users'] = 'Kullanıcılar';
+        if (can($user, 'roles.view')) $links['/admin/roles'] = 'Rol ve Yetkiler';
+        if (can($user, 'services.manage')) $links['/admin/services'] = 'Hizmetler';
+        if (can($user, 'packages.manage')) $links['/admin/packages'] = 'Paket ve Haklar';
+        if (can($user, 'clinical.view_all')) $links['/admin/clinical'] = 'Fizyoterapi Kayıtları';
+        if (can($user, 'exercises.manage')) $links['/admin/exercises'] = 'Egzersiz Programları';
+        if (can($user, 'schedules.manage_own') || can($user, 'schedules.view_all')) $links['/admin/availability'] = 'Çalışma Günleri';
+        if (can($user, 'time_off.manage_own') || can($user, 'time_off.manage_all')) $links['/admin/time-off'] = 'İzin ve Molalar';
+        if (can($user, 'payments.view_all')) $links['/admin/payments'] = 'Ödemeler';
+        if (can($user, 'reports.view')) $links['/admin/reports'] = 'Raporlar';
+        if (can($user, 'settings.manage')) $links['/admin/settings'] = 'Ayarlar';
+        if (can($user, 'audit_logs.view')) $links['/admin/audit'] = 'İşlem Kayıtları';
+        $links['/admin/profile'] = 'Profilim';
+    }
+    $html = '';
+    foreach ($links as $href => $label) {
+        $html .= '<a class="' . ($path === $href ? 'active' : '') . '" href="' . e(url_for($href)) . '">' . e($label) . '</a>';
+    }
+    return $html;
+}
+
+function render_route(array $user, string $path): void
+{
+    switch ($path) {
+        case '/admin': Authorization::require($user, 'dashboard.view'); render_dashboard($user); break;
+        case '/customer': render_dashboard($user); break;
+        case '/admin/users': Authorization::require($user, 'users.view'); render_users($user); break;
+        case '/admin/roles': Authorization::require($user, 'roles.view'); render_roles($user); break;
+        case '/admin/services': Authorization::require($user, 'services.manage'); render_services(); break;
+        case '/admin/packages': Authorization::require($user, 'packages.manage'); render_packages($user); break;
+        case '/admin/clinical': Authorization::require($user, 'clinical.view_all'); render_clinical($user); break;
+        case '/admin/exercises': Authorization::require($user, 'exercises.manage'); render_exercises($user); break;
+        case '/admin/reservations': case '/customer/reservations': case '/customer/book': render_reservations($user, $path); break;
+        case '/admin/availability': render_availability($user); break;
+        case '/admin/time-off': render_time_off($user); break;
+        case '/admin/payments': case '/customer/payments': render_payments($user); break;
+        case '/admin/reports': Authorization::require($user, 'reports.view'); render_reports($user); break;
+        case '/admin/settings': Authorization::require($user, 'settings.manage'); render_settings(); break;
+        case '/admin/audit': Authorization::require($user, 'audit_logs.view'); render_audit_logs(); break;
+        case '/admin/profile': case '/customer/profile': render_profile($user); break;
+        case '/customer/packages': render_customer_packages($user); break;
+        case '/customer/programs': render_customer_programs($user); break;
+        default: http_response_code(404); echo '<section class="panel empty-state"><h2>Sayfa bulunamadı</h2></section>';
+    }
+}
+
+function render_dashboard(array $user): void
+{
+    if ($user['role'] === 'customer') {
+        $packages = DB::fetchAll(Management::customerPackageSql() . ' WHERE cp.customer_id = ? ORDER BY cp.expires_at ASC', [$user['id']]);
+        $upcoming = ReservationService::list($user, ['from' => date('Y-m-d H:i:s')]);
+        ?><section class="welcome-card"><div><p class="eyebrow">Hoş geldiniz</p><h2><?= e($user['name']) ?></h2><p>Randevularınızı, paket haklarınızı ve ödeme durumunuzu buradan takip edebilirsiniz.</p></div><a class="btn btn-light" href="<?= e(url_for('/customer/book')) ?>">Yeni Randevu</a></section>
+        <section class="grid cards-3"><div class="metric"><span>Aktif paket</span><strong><?= count(array_filter($packages, fn ($p) => $p['status'] === 'active')) ?></strong></div><div class="metric"><span>Kalan hak</span><strong><?= array_sum(array_map(fn ($p) => (int) $p['credits_remaining'], $packages)) ?></strong></div><div class="metric"><span>Yaklaşan randevu</span><strong><?= count($upcoming) ?></strong></div></section><?php
+        render_reservation_table($user, array_slice($upcoming, 0, 8));
+        return;
+    }
+    $summary = Management::reportSummary($user);
+    ?><section class="grid cards-5"><div class="metric"><span>Bugün</span><strong><?= e($summary['today_reservations']) ?></strong></div><div class="metric"><span>Yaklaşan</span><strong><?= e($summary['upcoming_reservations']) ?></strong></div><div class="metric"><span>30 gün tamamlanan</span><strong><?= e($summary['completed_last_30_days']) ?></strong></div><div class="metric"><span>Gelmedi</span><strong><?= e($summary['no_show_last_30_days']) ?></strong></div><?php if (can($user, 'payments.view_all')): ?><div class="metric accent"><span>30 gün tahsilat</span><strong><?= money($summary['revenue_last_30_days']) ?></strong></div><?php endif; ?></section><?php
+    render_reservation_table($user, ReservationService::list($user, ['from' => date('Y-m-d 00:00:00'), 'to' => date('Y-m-d 23:59:59')]));
+}
+
+function render_users(array $actor): void
+{
+    $users = DB::fetchAll('SELECT id, role, name, email, phone, status, created_at FROM users ORDER BY FIELD(role, "super_admin", "admin", "staff", "consultant", "customer"), name');
+    if (can($actor, 'users.create')): ?>
+    <section class="panel"><div class="section-heading"><div><p class="eyebrow">Ekip ve danışanlar</p><h2>Yeni kullanıcı oluştur</h2></div></div><form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="create_user">
+    <label>Rol<select name="role"><option value="customer">Danışan</option><option value="consultant">Fizyoterapist</option><option value="staff">Resepsiyon / Personel</option><?php if ($actor['role'] === 'super_admin'): ?><option value="admin">Yönetici</option><?php endif; ?></select></label>
+    <label>Ad soyad<input name="name" required></label><label>E-posta<input type="email" name="email" required></label><label>Telefon<input name="phone"></label><label>Geçici şifre<input type="password" name="password" minlength="8" required></label><label>Fizyoterapist unvanı<input name="title" placeholder="Fizyoterapist"></label><button class="btn btn-primary">Kullanıcı Oluştur</button></form></section>
+    <?php endif; ?>
+    <section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($users) ?> kayıt</p><h2>Kullanıcılar</h2></div></div><div class="user-list">
+    <?php foreach ($users as $item): ?><details class="user-row"><summary><span class="avatar"><?= e(mb_strtoupper(mb_substr($item['name'], 0, 1))) ?></span><span class="user-summary"><strong><?= e($item['name']) ?></strong><small><?= e($item['email']) ?> · <?= e(role_label((string) $item['role'])) ?></small></span><span class="badge <?= e($item['status']) ?>"><?= e(status_account_label((string) $item['status'])) ?></span></summary>
+    <?php $editable = can($actor, 'users.update') && ($actor['role'] === 'super_admin' || !in_array($item['role'], ['super_admin', 'admin'], true)); if ($editable): ?><form method="post" class="form-grid compact"><?= csrf_field() ?><input type="hidden" name="action" value="update_user"><input type="hidden" name="user_id" value="<?= e($item['id']) ?>"><label>Ad soyad<input name="name" value="<?= e($item['name']) ?>" required></label><label>E-posta<input type="email" name="email" value="<?= e($item['email']) ?>" required></label><label>Telefon<input name="phone" value="<?= e($item['phone']) ?>"></label><label>Rol<select name="role"><?php user_role_options((string) $item['role'], $actor); ?></select></label><label>Durum<select name="status"><?php foreach (['active' => 'Aktif', 'pending' => 'Bekliyor', 'suspended' => 'Askıda', 'passive' => 'Pasif'] as $value => $label): ?><option value="<?= e($value) ?>" <?= selected($item['status'], $value) ?>><?= e($label) ?></option><?php endforeach; ?></select></label><label>Yeni şifre <small>(isteğe bağlı)</small><input type="password" name="password" minlength="8"></label><button class="btn btn-primary">Değişiklikleri Kaydet</button></form><?php endif; ?></details><?php endforeach; ?>
+    </div></section>
+    <?php
+}
+
+function render_roles(array $actor): void
+{
+    $groups = Authorization::permissionGroups();
+    ?><section class="panel"><div class="section-heading"><div><p class="eyebrow">Rol bazlı erişim</p><h2>Yetki matrisi</h2><p class="muted">Yetkiler kullanıcıya tek tek değil, role atanır. Süper yönetici tüm yetkilere sahiptir.</p></div></div></section><div class="role-grid"><?php
+    foreach (Authorization::roles() as $role): $assigned = Authorization::rolePermissionIds((int) $role['id']); $locked = in_array($role['slug'], ['super_admin', 'customer'], true) || !can($actor, 'roles.manage'); ?>
+        <form method="post" class="panel role-card"><?= csrf_field() ?><input type="hidden" name="action" value="save_role_permissions"><input type="hidden" name="role_id" value="<?= e($role['id']) ?>"><h2><?= e($role['name']) ?></h2>
+        <?php if ($role['slug'] === 'super_admin'): ?><p class="notice">Tüm yetkiler otomatik olarak açık.</p><?php elseif ($role['slug'] === 'customer'): ?><p class="notice">Danışan erişimi kendi portalı ile sınırlandırılmıştır.</p><?php else: foreach ($groups as $group => $permissions): ?><fieldset><legend><?= e($group) ?></legend><?php foreach ($permissions as $permission): ?><label class="check-label"><input type="checkbox" name="permission_ids[]" value="<?= e($permission['id']) ?>" <?= in_array((int) $permission['id'], $assigned, true) ? 'checked' : '' ?> <?= $locked ? 'disabled' : '' ?>><span><?= e($permission['name']) ?></span></label><?php endforeach; ?></fieldset><?php endforeach; if (!$locked): ?><button class="btn btn-primary">Yetkileri Kaydet</button><?php endif; endif; ?></form>
+    <?php endforeach; ?></div><?php
+}
+
+function render_services(): void
+{
+    $services = DB::fetchAll('SELECT * FROM services ORDER BY active DESC, name'); ?>
+    <section class="panel"><h2>Yeni hizmet / seans</h2><form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="create_service"><label>Hizmet adı<input name="name" required></label><label>Seans tipi<select name="type"><option value="one_to_one">Birebir</option><option value="group">Grup</option></select></label><label>Süre (dk)<input type="number" name="duration_minutes" value="60" min="10" required></label><label>Kapasite<input type="number" name="capacity" value="1" min="1"></label><label>Tek seans fiyatı<input type="number" step="0.01" name="price" value="0" min="0"></label><label>Açıklama<input name="description"></label><button class="btn btn-primary">Hizmet Ekle</button></form></section><?php render_simple_table($services, ['name' => 'Hizmet', 'type' => 'Tip', 'duration_minutes' => 'Süre', 'capacity' => 'Kapasite', 'price' => 'Fiyat', 'active' => 'Aktif']);
+}
+
+function render_packages(array $actor): void
+{
+    $packages = DB::fetchAll('SELECT * FROM packages ORDER BY active DESC, name'); $customers = customers();
+    $assigned = DB::fetchAll(Management::customerPackageSql() . ' ORDER BY cp.id DESC LIMIT 200'); ?>
+    <section class="grid two-col"><div class="panel"><h2>Yeni paket</h2><form method="post" class="form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="create_package"><label>Ad<input name="name" required></label><label>Hak sayısı<input type="number" name="total_credits" value="10" min="1"></label><label>Geçerlilik (gün)<input type="number" name="validity_days" value="30" min="1"></label><label>Fiyat<input type="number" step="0.01" name="price" value="0" min="0"></label><label>Açıklama<input name="description"></label><button class="btn btn-primary">Paket Ekle</button></form></div>
+    <div class="panel"><h2>Danışana paket tanımla</h2><p class="muted">Yeni paket ödemesi “bekliyor” olarak açılır; ödeme ekranından tahsilat kaydı girilir.</p><form method="post" class="form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="assign_package"><label>Danışan<select name="customer_id"><?php options($customers); ?></select></label><label>Paket<select name="package_id"><?php options($packages); ?></select></label><label>Başlangıç<input type="date" name="starts_at" value="<?= e(date('Y-m-d')) ?>"></label><button class="btn btn-primary">Paketi Tanımla</button></form></div></section>
+    <?php render_simple_table($packages, ['name' => 'Paket', 'total_credits' => 'Hak', 'validity_days' => 'Gün', 'price' => 'Fiyat']); ?>
+    <section class="panel"><h2>Tanımlı paketler ve hak düzeltme</h2><div class="table-wrap"><table><thead><tr><th>Danışan</th><th>Paket</th><th>Hak</th><th>Geçerlilik</th><th>Ödeme</th><?php if (can($actor, 'credits.adjust')): ?><th>Düzeltme</th><?php endif; ?></tr></thead><tbody>
+    <?php foreach ($assigned as $item): ?><tr><td><?= e($item['customer_name']) ?></td><td><?= e($item['package_name']) ?></td><td><strong><?= e($item['credits_remaining']) ?></strong> / <?= e($item['credits_total']) ?></td><td><?= e($item['expires_at']) ?></td><td><span class="badge <?= e($item['payment_status']) ?>"><?= e(payment_label((string) $item['payment_status'])) ?></span></td><?php if (can($actor, 'credits.adjust')): ?><td><form method="post" class="inline-form"><?= csrf_field() ?><input type="hidden" name="action" value="adjust_credit"><input type="hidden" name="customer_package_id" value="<?= e($item['id']) ?>"><input type="number" name="amount" placeholder="+/- hak" required><input name="note" placeholder="Düzeltme nedeni" required><button class="btn btn-small">Uygula</button></form></td><?php endif; ?></tr><?php endforeach; ?></tbody></table></div></section>
+    <section class="panel"><h2>Son hak hareketleri</h2><?php $moves = DB::fetchAll('SELECT ct.*, u.name AS customer_name, a.name AS actor_name FROM credit_transactions ct INNER JOIN users u ON u.id = ct.customer_id LEFT JOIN users a ON a.id = ct.created_by ORDER BY ct.id DESC LIMIT 100'); render_bare_table($moves, ['created_at' => 'Tarih', 'customer_name' => 'Danışan', 'amount' => 'Hareket', 'balance_after' => 'Yeni bakiye', 'reason' => 'Sebep', 'note' => 'Not', 'actor_name' => 'İşlemi yapan']); ?></section>
+    <?php
+}
+
+function render_reservations(array $user, string $path): void
+{
+    $filters = $path === '/customer/book' ? ['from' => date('Y-m-d H:i:s')] : [];
+    ?><section class="panel"><div class="section-heading"><div><p class="eyebrow">Birebir ve grup seansları</p><h2>Yeni rezervasyon</h2></div></div><?php render_reservation_form($user); ?></section><?php render_reservation_table($user, ReservationService::list($user, $filters));
+}
+
+function render_reservation_form(array $user): void
+{
+    $services = DB::fetchAll('SELECT * FROM services WHERE active = 1 ORDER BY name'); $physios = consultants(); $customerRows = customers();
+    $ownPackages = $user['role'] === 'customer' ? DB::fetchAll(Management::customerPackageSql() . ' WHERE cp.customer_id = ? AND cp.status = "active" ORDER BY cp.expires_at', [$user['id']]) : []; $manageAll = can($user, 'reservations.manage_all'); ?>
+    <form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="create_reservation">
+    <?php if ($manageAll): ?><label>Danışan<select name="customer_id"><?php options($customerRows); ?></select></label><label>Fizyoterapist<select name="consultant_id"><?php options($physios); ?></select></label><?php elseif ($user['role'] === 'consultant'): ?><label>Danışan<select name="customer_id"><?php options($customerRows); ?></select></label><?php else: ?><label>Fizyoterapist<select name="consultant_id"><?php options($physios); ?></select></label><?php endif; ?>
+    <label>Hizmet<select name="service_id"><?php options($services); ?></select></label><label>Rezervasyon tipi<select name="reservation_type" data-toggle-package><option value="package">Paket hakkı</option><option value="single">Tek seans</option></select></label>
+    <?php if ($user['role'] === 'customer'): ?><label data-package-field>Paket<select name="customer_package_id"><option value="">Süresi en yakın paket</option><?php options($ownPackages, 'package_name'); ?></select></label><?php endif; ?>
+    <label>Başlangıç<input type="datetime-local" name="starts_at" required></label><label>Not<input name="notes" placeholder="Seansla ilgili kısa not"></label><button class="btn btn-primary">Rezervasyon Oluştur</button></form><p class="form-note">Ödeme durumu rezervasyon formundan değiştirilemez; yalnızca kayıtlı ödeme işlemiyle güncellenir.</p>
+    <?php
+}
+
+function render_reservation_table(array $user, array $reservations): void
+{
+    ?><section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($reservations) ?> kayıt</p><h2>Rezervasyonlar</h2></div></div><div class="table-wrap"><table><thead><tr><th>Tarih</th><th>Hizmet</th><th>Danışan</th><th>Fizyoterapist</th><th>Durum</th><th>Ödeme</th><th>İşlem</th></tr></thead><tbody>
+    <?php foreach ($reservations as $item): ?><tr><td><strong><?= e(dt((string) $item['starts_at'])) ?></strong><small><?= e($item['reservation_type'] === 'single' ? 'Tek seans' : 'Paket') ?></small></td><td><?= e($item['service_name']) ?></td><td><?= e($item['customer_name']) ?></td><td><?= e($item['consultant_name']) ?></td><td><span class="badge <?= e($item['status']) ?>"><?= e(status_label((string) $item['status'])) ?></span></td><td><span class="badge <?= e($item['payment_status']) ?>"><?= e(payment_label((string) $item['payment_status'])) ?></span></td><td class="actions">
+    <?php if (in_array($item['status'], ['pending', 'confirmed'], true)): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="cancel_reservation"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-danger">İptal</button></form><details class="action-pop"><summary class="btn btn-small">Taşı</summary><form method="post" class="popover"><?= csrf_field() ?><input type="hidden" name="action" value="reschedule_reservation"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><input type="datetime-local" name="starts_at" required><button class="btn btn-small">Kaydet</button></form></details><?php endif; ?>
+    <?php if ((can($user, 'reservations.manage_all') || ($user['role'] === 'consultant' && can($user, 'reservations.manage_own'))) && in_array($item['status'], ['pending', 'confirmed'], true)): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="set_reservation_status"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><input type="hidden" name="status" value="completed"><button class="btn btn-small btn-success">Geldi</button></form><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="set_reservation_status"><input type="hidden" name="reservation_id" value="<?= e($item['id']) ?>"><input type="hidden" name="status" value="no_show"><button class="btn btn-small">Gelmedi</button></form><?php endif; ?></td></tr><?php endforeach; ?>
+    <?php if (!$reservations): ?><tr><td colspan="7" class="empty">Henüz rezervasyon yok.</td></tr><?php endif; ?></tbody></table></div></section><?php
+}
+
+function render_availability(array $user): void
+{
+    $items = ScheduleService::availability($user); $manageAll = can($user, 'schedules.manage_all'); ?>
+    <section class="panel"><h2>Çalışma aralığı ekle</h2><p class="muted">Fizyoterapist kendi programını, yetkili resepsiyon personeli tüm fizyoterapistlerin programını düzenleyebilir.</p><form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="add_availability"><?php if ($manageAll): ?><label>Fizyoterapist<select name="consultant_id"><?php options(consultants()); ?></select></label><?php endif; ?><label>Gün<select name="weekday"><?php foreach (weekdays() as $key => $day): ?><option value="<?= e($key) ?>"><?= e($day) ?></option><?php endforeach; ?></select></label><label>Başlangıç<input type="time" name="start_time" value="09:00" required></label><label>Bitiş<input type="time" name="end_time" value="18:00" required></label><button class="btn btn-primary">Programa Ekle</button></form></section>
+    <section class="panel"><h2>Haftalık çalışma günleri</h2><div class="table-wrap"><table><thead><tr><th>Fizyoterapist</th><th>Gün</th><th>Saat</th><th></th></tr></thead><tbody><?php foreach ($items as $item): ?><tr><td><?= e($item['consultant_name']) ?></td><td><?= e(weekdays()[(int) $item['weekday']] ?? '-') ?></td><td><?= e(substr((string) $item['start_time'], 0, 5) . ' – ' . substr((string) $item['end_time'], 0, 5)) ?></td><td><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="delete_availability"><input type="hidden" name="availability_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-danger">Sil</button></form></td></tr><?php endforeach; ?></tbody></table></div></section><?php
+}
+
+function render_time_off(array $user): void
+{
+    $items = ScheduleService::timeOff($user); $manageAll = can($user, 'time_off.manage_all'); ?>
+    <section class="panel"><h2>İzin / mola ekle</h2><form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="add_time_off"><?php if ($manageAll): ?><label>Fizyoterapist<select name="consultant_id"><?php options(consultants()); ?></select></label><?php endif; ?><label>Başlangıç<input type="datetime-local" name="start_at" required></label><label>Bitiş<input type="datetime-local" name="end_at" required></label><label>Neden<input name="reason"></label><label class="check-label"><input type="checkbox" name="confirm_conflicts" value="1"><span>Aktif randevu çakışması varsa kontrol ettim</span></label><button class="btn btn-primary">İzin Ekle</button></form></section>
+    <section class="panel"><h2>İzin kayıtları</h2><div class="table-wrap"><table><thead><tr><th>Fizyoterapist</th><th>Başlangıç</th><th>Bitiş</th><th>Neden</th><th></th></tr></thead><tbody><?php foreach ($items as $item): ?><tr><td><?= e($item['consultant_name']) ?></td><td><?= e(dt((string) $item['start_at'])) ?></td><td><?= e(dt((string) $item['end_at'])) ?></td><td><?= e($item['reason']) ?></td><td><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="delete_time_off"><input type="hidden" name="time_off_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-danger">Sil</button></form></td></tr><?php endforeach; ?></tbody></table></div></section><?php
+}
+
+function render_payments(array $user): void
+{
+    $payments = PaymentService::list($user);
+    if ($user['role'] !== 'customer' && can($user, 'payments.create')) {
+        $customerPackages = DB::fetchAll(Management::customerPackageSql() . ' WHERE cp.payment_status != "paid" ORDER BY cp.id DESC');
+        $singleReservations = DB::fetchAll('SELECT r.id, r.price, c.name AS customer_name, s.name AS service_name FROM reservations r INNER JOIN users c ON c.id=r.customer_id INNER JOIN services s ON s.id=r.service_id WHERE r.reservation_type="single" AND r.payment_status != "paid" ORDER BY r.id DESC'); ?>
+        <section class="grid two-col"><div class="panel"><h2>Paket ödemesi kaydet</h2><?php payment_beta_notice(); ?><form method="post" class="form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="create_payment"><input type="hidden" name="target_type" value="package"><label>Paket<select name="target_id" data-payment-package><?php foreach ($customerPackages as $item): ?><option value="<?= e($item['id']) ?>" data-customer="<?= e($item['customer_id']) ?>" data-amount="<?= e($item['package_price']) ?>"><?= e($item['customer_name'] . ' · ' . $item['package_name']) ?></option><?php endforeach; ?></select></label><label>Danışan<select name="customer_id"><?php options(customers()); ?></select></label><label>Tutar<input type="number" name="amount" step="0.01" min="0.01" required></label><?php payment_method_fields(); ?><button class="btn btn-primary">Ödeme Kaydı Oluştur</button></form></div>
+        <div class="panel"><h2>Tek seans ödemesi kaydet</h2><form method="post" class="form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="create_payment"><input type="hidden" name="target_type" value="reservation"><label>Rezervasyon<select name="target_id"><?php foreach ($singleReservations as $item): ?><option value="<?= e($item['id']) ?>"><?= e('#' . $item['id'] . ' · ' . $item['customer_name'] . ' · ' . $item['service_name']) ?></option><?php endforeach; ?></select></label><label>Danışan<select name="customer_id"><?php options(customers()); ?></select></label><label>Tutar<input type="number" name="amount" step="0.01" min="0.01" required></label><?php payment_method_fields(); ?><button class="btn btn-primary">Ödeme Kaydı Oluştur</button></form></div></section><?php
+    }
+    $canPaymentAction = can($user, 'payments.approve') || can($user, 'payments.refund');
+    ?><section class="panel"><div class="section-heading"><div><p class="eyebrow"><?= count($payments) ?> kayıt</p><h2><?= $user['role'] === 'customer' ? 'Ödeme geçmişim' : 'Ödeme hareketleri' ?></h2></div></div><div class="table-wrap"><table><thead><tr><th>Tarih</th><?php if ($user['role'] !== 'customer'): ?><th>Danışan</th><?php endif; ?><th>Tutar</th><th>Yöntem</th><th>Referans</th><th>Durum</th><?php if ($canPaymentAction): ?><th>İşlem</th><?php endif; ?></tr></thead><tbody><?php foreach ($payments as $item): ?><tr><td><?= e(dt((string) $item['created_at'])) ?></td><?php if ($user['role'] !== 'customer'): ?><td><?= e($item['customer_name']) ?></td><?php endif; ?><td><strong><?= money($item['amount'], (string) $item['currency']) ?></strong></td><td><?= e(PaymentService::METHODS[$item['method']] ?? $item['method']) ?></td><td><?= e($item['reference_no'] ?: '-') ?></td><td><span class="badge <?= e($item['status']) ?>"><?= e(PaymentService::STATUSES[$item['status']] ?? $item['status']) ?></span></td><?php if ($canPaymentAction): ?><td class="actions"><?php if (can($user, 'payments.approve') && in_array($item['status'], ['pending', 'awaiting_approval'], true)): ?><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="approve_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-success">Onayla</button></form><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="cancel_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><button class="btn btn-small btn-danger">İptal</button></form><?php elseif (can($user, 'payments.refund') && $item['status'] === 'paid'): ?><details class="action-pop"><summary class="btn btn-small">İade</summary><form method="post" class="popover"><?= csrf_field() ?><input type="hidden" name="action" value="refund_payment"><input type="hidden" name="payment_id" value="<?= e($item['id']) ?>"><input name="note" placeholder="İade nedeni" required><button class="btn btn-small btn-danger">İade Et</button></form></details><?php endif; ?></td><?php endif; ?></tr><?php endforeach; ?><?php if (!$payments): ?><tr><td colspan="7" class="empty">Ödeme kaydı yok.</td></tr><?php endif; ?></tbody></table></div></section><?php
+}
+
+function payment_method_fields(): void
+{
+    ?><label>Yöntem<select name="method"><?php foreach (PaymentService::METHODS as $value => $label): ?><option value="<?= e($value) ?>"><?= e($label) ?></option><?php endforeach; ?></select></label><label>Referans no<input name="reference_no" placeholder="Dekont / işlem no"></label><label>Not<input name="note"></label><?php
+}
+
+function payment_beta_notice(): void
+{
+    ?><p class="notice">Banka, kart ve PayPal seçenekleri beta aşamasında manuel kayıt/onarım akışıyla çalışır. Canlı entegrasyon daha sonra açılacaktır.</p><?php
+}
+
+function render_clinical(array $user): void
+{
+    $customerRows = customers(); $physios = consultants(); $notes = ClinicalService::notes($user);
+    $history = DB::fetchAll('SELECT h.*, c.name AS customer_name, u.name AS created_by_name FROM patient_history h INNER JOIN users c ON c.id=h.customer_id INNER JOIN users u ON u.id=h.created_by ORDER BY h.id DESC LIMIT 200'); ?>
+    <section class="grid two-col"><form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="create_clinical_note"><p class="eyebrow">Fizyoterapi süreci</p><h2>Değerlendirme / seans notu</h2><label>Danışan<select name="customer_id"><?php options($customerRows); ?></select></label><?php if ($user['role'] !== 'consultant'): ?><label>Fizyoterapist<select name="consultant_id"><?php options($physios); ?></select></label><?php endif; ?><label>Not türü<select name="note_type"><option value="assessment">İlk değerlendirme</option><option value="treatment">Seans / uygulama notu</option><option value="progress">İlerleme değerlendirmesi</option><option value="discharge">Süreç sonu notu</option></select></label><label>Danışanın beyanı<textarea name="subjective" rows="3" placeholder="Şikâyet, geri bildirim, seans öncesi durum"></textarea></label><label>Fizyoterapist gözlemi<textarea name="objective" rows="3" placeholder="Fonksiyonel gözlem ve ölçümler"></textarea></label><label>Değerlendirme<textarea name="assessment" rows="3"></textarea></label><label>Uygulama / sonraki plan<textarea name="plan" rows="3"></textarea></label><label>Görünürlük<select name="visibility"><option value="internal">Yalnızca ekip</option><option value="customer_shared">Danışanla plan ve değerlendirmeyi paylaş</option></select></label><button class="btn btn-primary">Notu Kaydet</button></form>
+    <form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="add_patient_history"><p class="eyebrow">Danışan geçmişi</p><h2>Geçmiş / hedef kaydı ekle</h2><label>Danışan<select name="customer_id"><?php options($customerRows); ?></select></label><label>Kayıt türü<select name="history_type"><option value="goal">Hedef</option><option value="injury">Geçmiş yaralanma</option><option value="condition">Mevcut durum</option><option value="allergy">Alerji / hassasiyet</option><option value="other">Diğer</option></select></label><label>Başlık<input name="title" required></label><label>Tarih<input type="date" name="event_date"></label><label>Ayrıntılar<textarea name="details" rows="6"></textarea></label><button class="btn btn-primary">Geçmişe Ekle</button></form></section>
+    <section class="panel"><h2>Son fizyoterapi kayıtları</h2><div class="clinical-list"><?php foreach ($notes as $item): ?><article class="clinical-entry"><header><div><strong><?= e($item['customer_name']) ?></strong><small><?= e(clinical_type_label((string) $item['note_type'])) ?> · <?= e(dt((string) $item['created_at'])) ?> · <?= e($item['consultant_name']) ?></small></div><span class="badge"><?= $item['visibility'] === 'customer_shared' ? 'Danışanla paylaşıldı' : 'Ekip içi' ?></span></header><?php if ($item['subjective']): ?><p><b>Danışan:</b> <?= nl2br(e($item['subjective'])) ?></p><?php endif; ?><?php if ($item['objective']): ?><p><b>Gözlem:</b> <?= nl2br(e($item['objective'])) ?></p><?php endif; ?><?php if ($item['assessment']): ?><p><b>Değerlendirme:</b> <?= nl2br(e($item['assessment'])) ?></p><?php endif; ?><?php if ($item['plan']): ?><p><b>Plan:</b> <?= nl2br(e($item['plan'])) ?></p><?php endif; ?></article><?php endforeach; ?><?php if (!$notes): ?><p class="empty">Henüz fizyoterapi kaydı yok.</p><?php endif; ?></div></section>
+    <section class="panel"><h2>Danışan geçmişi</h2><?php render_bare_table($history, ['customer_name' => 'Danışan', 'history_type' => 'Tür', 'title' => 'Başlık', 'details' => 'Ayrıntı', 'event_date' => 'Tarih', 'created_by_name' => 'Ekleyen']); ?></section><?php
+}
+
+function render_exercises(array $user): void
+{
+    $exercises = DB::fetchAll('SELECT * FROM exercise_library WHERE active=1 ORDER BY name');
+    $programs = DB::fetchAll('SELECT ep.*, c.name AS customer_name, u.name AS created_by_name FROM exercise_programs ep INNER JOIN users c ON c.id=ep.customer_id INNER JOIN users u ON u.id=ep.created_by ORDER BY ep.id DESC LIMIT 200'); ?>
+    <section class="grid two-col"><form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="create_exercise"><p class="eyebrow">Egzersiz kütüphanesi</p><h2>Egzersiz ekle</h2><label>Egzersiz adı<input name="name" required></label><label>Kısa açıklama<textarea name="description" rows="3"></textarea></label><label>Uygulama yönergesi<textarea name="instructions" rows="6"></textarea></label><button class="btn btn-primary">Kütüphaneye Ekle</button></form>
+    <form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="create_exercise_program"><p class="eyebrow">Danışana özel</p><h2>Egzersiz programı oluştur</h2><label>Danışan<select name="customer_id"><?php options(customers()); ?></select></label><label>Program adı<input name="title" required placeholder="Örn. 1. Hafta Ev Programı"></label><label>Egzersiz<select name="exercise_id"><?php options($exercises); ?></select></label><div class="form-grid compact"><label>Set<input type="number" name="sets_count" min="1"></label><label>Tekrar<input name="repetitions" placeholder="10 tekrar"></label><label>Bekleme sn<input type="number" name="hold_seconds" min="0"></label></div><label>Sıklık<input name="frequency_text" placeholder="Günde 2 kez"></label><label>Özel yönerge<textarea name="item_instructions" rows="3"></textarea></label><label>Başlangıç<input type="date" name="starts_at" value="<?= e(date('Y-m-d')) ?>"></label><label>Bitiş<input type="date" name="expires_at"></label><label>Program notu<textarea name="notes" rows="3"></textarea></label><button class="btn btn-primary">Programı Yayınla</button></form></section>
+    <section class="panel"><h2>Mevcut programa egzersiz ekle</h2><form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="add_exercise_program_item"><label>Program<select name="program_id"><?php foreach ($programs as $item): ?><option value="<?= e($item['id']) ?>"><?= e($item['customer_name'] . ' · ' . $item['title']) ?></option><?php endforeach; ?></select></label><label>Egzersiz<select name="exercise_id"><?php options($exercises); ?></select></label><label>Set<input type="number" name="sets_count" min="1"></label><label>Tekrar<input name="repetitions" placeholder="10 tekrar"></label><label>Bekleme (sn)<input type="number" name="hold_seconds" min="0"></label><label>Sıklık<input name="frequency_text" placeholder="Günde 2 kez"></label><label>Özel yönerge<input name="item_instructions"></label><button class="btn btn-primary">Programa Ekle</button></form></section>
+    <section class="panel"><h2>Egzersiz kütüphanesi</h2><?php render_bare_table($exercises, ['name' => 'Egzersiz', 'description' => 'Açıklama', 'instructions' => 'Yönerge']); ?></section><section class="panel"><h2>Programlar</h2><?php render_bare_table($programs, ['customer_name' => 'Danışan', 'title' => 'Program', 'starts_at' => 'Başlangıç', 'expires_at' => 'Bitiş', 'status' => 'Durum', 'created_by_name' => 'Hazırlayan']); ?></section><?php
+}
+
+function render_customer_programs(array $user): void
+{
+    $programs = ClinicalService::programsForCustomer((int) $user['id']); $notes = ClinicalService::sharedNotesForCustomer((int) $user['id']); ?>
+    <section class="program-grid"><?php foreach ($programs as $item): ?><article class="panel program-card"><p class="eyebrow"><?= e($item['starts_at']) ?><?= $item['expires_at'] ? ' – ' . e($item['expires_at']) : '' ?></p><h2><?= e($item['title']) ?></h2><h3><?= e($item['exercise_name']) ?></h3><?php if ($item['description']): ?><p><?= nl2br(e($item['description'])) ?></p><?php endif; ?><div class="exercise-stats"><span><strong><?= e($item['sets_count'] ?: '-') ?></strong> set</span><span><strong><?= e($item['repetitions'] ?: '-') ?></strong> tekrar</span><span><strong><?= e($item['hold_seconds'] ?: '-') ?></strong> sn</span></div><?php if ($item['frequency_text']): ?><p><b>Sıklık:</b> <?= e($item['frequency_text']) ?></p><?php endif; ?><?php if ($item['exercise_instructions'] || $item['item_instructions']): ?><div class="notice"><?= nl2br(e($item['item_instructions'] ?: $item['exercise_instructions'])) ?></div><?php endif; ?></article><?php endforeach; ?><?php if (!$programs): ?><section class="panel empty-state"><h2>Aktif egzersiz programınız yok</h2><p>Fizyoterapistiniz program yayınladığında burada görünecek.</p></section><?php endif; ?></section>
+    <?php if ($notes): ?><section class="panel"><h2>Sizinle paylaşılan süreç notları</h2><div class="clinical-list"><?php foreach ($notes as $item): ?><article class="clinical-entry"><header><div><strong><?= e(clinical_type_label((string) $item['note_type'])) ?></strong><small><?= e(dt((string) $item['created_at'])) ?> · <?= e($item['consultant_name']) ?></small></div></header><?php if ($item['assessment']): ?><p><b>Değerlendirme:</b> <?= nl2br(e($item['assessment'])) ?></p><?php endif; ?><?php if ($item['plan']): ?><p><b>Plan:</b> <?= nl2br(e($item['plan'])) ?></p><?php endif; ?></article><?php endforeach; ?></div></section><?php endif;
+}
+
+function render_reports(array $user): void
+{
+    render_dashboard($user); $popular = DB::fetchAll('SELECT s.name, COUNT(*) AS total FROM reservations r INNER JOIN services s ON s.id = r.service_id GROUP BY s.id ORDER BY total DESC LIMIT 10'); render_simple_table($popular, ['name' => 'Hizmet', 'total' => 'Rezervasyon']);
+}
+
+function render_settings(): void
+{
+    $settings = Management::publicSettings(); ?>
+    <section class="grid two-col"><form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="save_settings"><h2>Rezervasyon kuralları</h2><label>Değişiklik son süresi (saat)<input type="number" name="booking_change_deadline_hours" value="<?= e($settings['booking_change_deadline_hours']) ?>" min="0"></label><label>Geç iptalde hak yansın mı?<select name="late_cancel_burn_credit"><option value="1" <?= selected($settings['late_cancel_burn_credit'], '1') ?>>Evet</option><option value="0" <?= selected($settings['late_cancel_burn_credit'], '0') ?>>Hayır</option></select></label><label>Hak düşme anı<select name="credit_deduction_policy"><option value="on_booking" <?= selected($settings['credit_deduction_policy'], 'on_booking') ?>>Rezervasyon oluşturulunca</option><option value="on_attendance" <?= selected($settings['credit_deduction_policy'], 'on_attendance') ?>>Geldi / gelmedi işaretlenince</option></select></label><label>Hatırlatma (saat)<input type="number" name="reservation_reminder_hours" value="<?= e($settings['reservation_reminder_hours']) ?>" min="1"></label><button class="btn btn-primary">Kuralları Kaydet</button></form>
+    <form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="save_settings"><h2>Ödeme ayarları</h2><?php payment_beta_notice(); ?><label>Para birimi<input name="currency" value="<?= e($settings['currency']) ?>" maxlength="3"></label><label>Banka adı<input name="bank_name" value="<?= e($settings['bank_name']) ?>"></label><label>Hesap sahibi<input name="bank_account_name" value="<?= e($settings['bank_account_name']) ?>"></label><label>IBAN<input name="bank_iban" value="<?= e($settings['bank_iban']) ?>"></label><button class="btn btn-primary">Ödeme Ayarlarını Kaydet</button></form></section><?php
+}
+
+function render_audit_logs(): void
+{
+    $logs = DB::fetchAll('SELECT a.*, u.name AS actor_name FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id ORDER BY a.id DESC LIMIT 500'); ?>
+    <section class="panel"><div class="section-heading"><div><p class="eyebrow">Son <?= count($logs) ?> hareket</p><h2>Değiştirilemez işlem izi</h2><p class="muted">Kullanıcı, rol, rezervasyon, ödeme, hak ve fizyoterapi kaydı işlemleri burada izlenir.</p></div></div><?php render_bare_table($logs, ['created_at' => 'Tarih', 'actor_name' => 'İşlemi yapan', 'action' => 'İşlem', 'entity_type' => 'Kayıt türü', 'entity_id' => 'Kayıt no', 'ip_address' => 'IP', 'details_json' => 'Ayrıntı']); ?></section><?php
+}
+
+function render_customer_packages(array $user): void
+{
+    $packages = DB::fetchAll(Management::customerPackageSql() . ' WHERE cp.customer_id = ? ORDER BY cp.expires_at DESC', [$user['id']]); ?>
+    <section class="package-grid"><?php foreach ($packages as $item): ?><article class="panel package-card"><div><span class="badge <?= e($item['status']) ?>"><?= e($item['status']) ?></span><h2><?= e($item['package_name']) ?></h2><p><?= e($item['starts_at']) ?> – <?= e($item['expires_at']) ?></p></div><div class="credit-ring"><strong><?= e($item['credits_remaining']) ?></strong><span>/ <?= e($item['credits_total']) ?> hak</span></div><p>Ödeme: <strong><?= e(payment_label((string) $item['payment_status'])) ?></strong></p></article><?php endforeach; ?><?php if (!$packages): ?><section class="panel empty-state"><h2>Henüz paketiniz yok</h2><p>Size uygun paket için işletmeyle iletişime geçebilirsiniz.</p></section><?php endif; ?></section>
+    <section class="panel"><h2>Hak hareketleri</h2><?php $moves = DB::fetchAll('SELECT ct.* FROM credit_transactions ct WHERE ct.customer_id = ? ORDER BY ct.id DESC LIMIT 100', [$user['id']]); render_bare_table($moves, ['created_at' => 'Tarih', 'amount' => 'Hareket', 'balance_after' => 'Kalan', 'reason' => 'Sebep', 'note' => 'Not']); ?></section><?php
+}
+
+function render_profile(array $user): void
+{
+    ?><section class="grid two-col"><form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="update_profile"><p class="eyebrow">Hesap bilgileri</p><h2>Profilimi güncelle</h2><label>Ad soyad<input name="name" value="<?= e($user['name']) ?>" required></label><label>E-posta<input value="<?= e($user['email']) ?>" disabled></label><label>Telefon<input name="phone" value="<?= e($user['phone']) ?>"></label><button class="btn btn-primary">Bilgileri Kaydet</button></form>
+    <form method="post" class="panel form-grid single"><?= csrf_field() ?><input type="hidden" name="action" value="change_password"><p class="eyebrow">Güvenlik</p><h2>Şifremi değiştir</h2><label>Mevcut şifre<input type="password" name="current_password" required></label><label>Yeni şifre<input type="password" name="new_password" minlength="8" required></label><label>Yeni şifre tekrarı<input type="password" name="new_password_confirmation" minlength="8" required></label><button class="btn btn-primary">Şifreyi Değiştir</button></form></section><?php
+}
+
+function render_simple_table(array $rows, array $columns): void
+{
+    ?><section class="panel"><?php render_bare_table($rows, $columns); ?></section><?php
+}
+
+function render_bare_table(array $rows, array $columns): void
+{
+    ?><div class="table-wrap"><table><thead><tr><?php foreach ($columns as $label): ?><th><?= e($label) ?></th><?php endforeach; ?></tr></thead><tbody><?php foreach ($rows as $row): ?><tr><?php foreach ($columns as $key => $label): ?><td><?= e($row[$key] ?? '') ?></td><?php endforeach; ?></tr><?php endforeach; ?><?php if (!$rows): ?><tr><td colspan="<?= count($columns) ?>" class="empty">Kayıt yok.</td></tr><?php endif; ?></tbody></table></div><?php
+}
+
+function render_flash(?array $flash): void
+{
+    if ($flash) echo '<div class="flash ' . e($flash['type']) . '">' . e($flash['message']) . '</div>';
+}
+
+function render_error(Throwable $e): void
+{
+    ?><!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="<?= e(asset_url('assets/css/app.css')) ?>"><title>FizyoRez Hata</title></head><body class="auth-page"><main class="auth-card wide"><div class="brand-mark">FR</div><h1>İşlem tamamlanamadı</h1><p><?= e(friendly_error_message($e)) ?></p><p class="muted">Kurulum ayrıntıları için <a href="<?= e(url_for('/health')) ?>">sistem kontrolünü</a> açabilirsiniz.</p><a class="btn btn-primary" href="<?= e(url_for('/login')) ?>">Girişe dön</a></main></body></html><?php
+}
+
+function customers(): array { return DB::fetchAll('SELECT id, name FROM users WHERE role = "customer" AND status = "active" ORDER BY name'); }
+function consultants(): array { return DB::fetchAll('SELECT id, name FROM users WHERE role = "consultant" AND status = "active" ORDER BY name'); }
+function options(array $rows, string $labelKey = 'name'): void { foreach ($rows as $row) echo '<option value="' . e($row['id']) . '">' . e($row[$labelKey] ?? $row['name'] ?? $row['id']) . '</option>'; }
+function csrf_field(): string { return '<input type="hidden" name="_csrf" value="' . e(csrf_token()) . '">'; }
+function selected(mixed $left, mixed $right): string { return (string) $left === (string) $right ? 'selected' : ''; }
+function weekdays(): array { return [1 => 'Pazartesi', 2 => 'Salı', 3 => 'Çarşamba', 4 => 'Perşembe', 5 => 'Cuma', 6 => 'Cumartesi', 7 => 'Pazar']; }
+function dt(string $value): string { return (new DateTimeImmutable($value))->format('d.m.Y H:i'); }
+function money(float|int|string $value, string $currency = 'TRY'): string { return number_format((float) $value, 2, ',', '.') . ' ' . e($currency); }
+function status_label(string $status): string { return ['pending' => 'Bekliyor', 'confirmed' => 'Onaylı', 'cancelled' => 'İptal', 'completed' => 'Geldi', 'no_show' => 'Gelmedi'][$status] ?? $status; }
+function status_account_label(string $status): string { return ['active' => 'Aktif', 'pending' => 'Bekliyor', 'suspended' => 'Askıda', 'passive' => 'Pasif'][$status] ?? $status; }
+function payment_label(string $status): string { return PaymentService::STATUSES[$status] ?? $status; }
+function clinical_type_label(string $type): string { return ['assessment' => 'İlk değerlendirme', 'treatment' => 'Seans / uygulama notu', 'progress' => 'İlerleme değerlendirmesi', 'discharge' => 'Süreç sonu notu'][$type] ?? $type; }
+function user_role_options(string $current, array $actor): void { $roles = ['customer' => 'Danışan', 'consultant' => 'Fizyoterapist', 'staff' => 'Resepsiyon / Personel']; if ($actor['role'] === 'super_admin') $roles = ['super_admin' => 'Süper Yönetici', 'admin' => 'Yönetici'] + $roles; foreach ($roles as $value => $label) echo '<option value="' . e($value) . '" ' . selected($current, $value) . '>' . e($label) . '</option>'; }

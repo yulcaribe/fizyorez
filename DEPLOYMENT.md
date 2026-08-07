@@ -1,70 +1,56 @@
-# FizyoRez Production Setup
+# FizyoRez Beta Kurulumu
 
-Domain: https://www.yulcaribe.com
+## Gereksinimler
 
-## 1. Create MySQL Database
+- PHP 8.0+ (önerilen 8.2 veya 8.3)
+- `pdo_mysql`, `session` ve `mbstring` PHP eklentileri
+- MySQL 8 veya MariaDB 10.4+
+- Apache `mod_rewrite` ve `.htaccess` desteği
 
-In cPanel or your hosting panel:
+## 1. Dosyaları yükleyin
 
-1. Create a database named `fizyorez`.
-2. Create a database user named `fizyorez`.
-3. Give that user all privileges on the database.
+Proje içeriğini alan adının web köküne yükleyin. Yönetim paneli otomatik olarak `/admin` adresinde, danışan girişi `/login` adresinde çalışır.
 
-cPanel usually adds an account prefix. If your cPanel username is `yulcarib`, the real values may look like:
+## 2. Yerel yapılandırmayı oluşturun
 
-- Database: `yulcarib_fizyorez`
-- User: `yulcarib_fizyorez`
-- Password: the password you choose
+`config/config.example.php` dosyasını `config/config.php` adıyla kopyalayın ve alan adı, veritabanı, e-posta ve güvenlik değerlerini doldurun. `config/config.php` Git tarafından bilerek yok sayılır; gerçek şifreleri GitHub'a göndermeyin.
 
-## 2. Update Config
+Uygulama bir alt klasördeyse `app.base_path` değerini örneğin `/fizyorez` yapın. Alan adının kökündeyse boş bırakın.
 
-Edit `config/config.php`:
+## 3. Veritabanını hazırlayın
 
-```php
-'db' => [
-    'host' => 'localhost',
-    'name' => 'yulcarib_fizyorez',
-    'user' => 'yulcarib_fizyorez',
-    'pass' => 'YOUR_DATABASE_PASSWORD',
-    'charset' => 'utf8mb4',
-],
-```
-
-If the app is uploaded directly under `public_html`, keep:
-
-```php
-'base_path' => '',
-```
-
-If it is uploaded under a folder like `public_html/fizyorez`, use:
-
-```php
-'base_path' => '/fizyorez',
-```
-
-## 3. Import SQL
-
-In phpMyAdmin, select the database and import these files in order:
+Bu sürüm beta verilerini korumayı hedeflemez. Mevcut test verileri önemli değilse eski FizyoRez tablolarını yedekleyip boş bir veritabanı oluşturun. phpMyAdmin'de sırasıyla:
 
 1. `database/schema.sql`
-2. `database/production-admin.sql`
+2. Canlı yönetici hesabı gerekiyorsa `database/production-admin.sql`
 
-## 4. Check Installation
+dosyalarını içe aktarın.
 
-Open:
+Demo şemasındaki hesaplar yalnızca yerel/beta test içindir ve varsayılan şifreleri `password` değeridir. İnternete açık kurulumda demo hesaplarını pasife alın ve gerçek süper yönetici şifresini hemen değiştirin.
+
+## 4. Kurulumu kontrol edin
+
+Tarayıcıda `/health` adresini açın. Tüm satırlar “Hazır” olmalıdır. Ardından:
+
+- Ekip paneli: `/admin`
+- Giriş: `/login`
+- Danışan üyeliği: `/register`
+- Beta API durumu: `/api/v1/health`
+
+## 5. E-posta kuyruğu
+
+Hosting zamanlanmış görevine aşağıdaki PHP dosyasını ekleyin:
 
 ```text
-https://www.yulcaribe.com/health
+php /tam/yol/cron/send-mail.php
 ```
 
-Every row should show `OK`.
+Cron ve API güvenlik anahtarlarını uzun, rastgele ve birbirinden farklı tutun.
 
-## 5. Login
+## Canlıya geçmeden önce
 
-Open:
-
-```text
-https://www.yulcaribe.com/login
-```
-
-Use the production admin email and temporary password, then create your real users from the admin panel.
+- Test veritabanı şifresini ve daha önce GitHub'a girmiş olabilecek anahtarları yenileyin.
+- `config/config.php` dosyasının GitHub'a gönderilmediğini doğrulayın.
+- Demo hesaplarını kapatın.
+- HTTPS'i zorunlu yapın ve düzenli veritabanı yedeği alın.
+- PayPal/banka/kart seçeneklerinin beta aşamasında manuel kayıt olduğunu personele bildirin; canlı entegrasyon eklenmeden otomatik tahsilat yapmazlar.

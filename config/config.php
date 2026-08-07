@@ -22,4 +22,11 @@ return [
         'token_secret' => '901432a95e5735a37cb4518944330ce7632fb828bdf1a18402bdda26b82a0dd1',
         'cron_token' => '1594fbd414941384300726e3e182fa3ea8c6d332ce794018',
     ],
+    'registration' => [
+        'enabled' => true,
+        'require_email_verification' => false,
+    ],
+    'api' => [
+        'allowed_origin' => 'https://www.yulcaribe.com',
+    ],
 ];

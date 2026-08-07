@@ -22,4 +22,11 @@ return [
         'token_secret' => 'replace-with-a-long-random-string',
         'cron_token' => 'replace-with-another-random-string',
     ],
+    'registration' => [
+        'enabled' => true,
+        'require_email_verification' => false,
+    ],
+    'api' => [
+        'allowed_origin' => 'https://your-domain.com',
+    ],
 ];

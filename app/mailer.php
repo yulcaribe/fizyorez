@@ -44,14 +44,14 @@ final class Mailer
         ];
         $subject = ($titles[$eventType] ?? 'Rezervasyon bildirimi') . ' - ' . config('app.name', 'FizyoRez');
         $body = sprintf(
-            "%s\n\nHizmet: %s\nDanışan: %s\nDanışman: %s\nTarih: %s\nDurum: %s\n\n%s",
+            "%s\n\nHizmet: %s\nDanışan: %s\nFizyoterapist: %s\nTarih: %s\nDurum: %s\n\n%s",
             $titles[$eventType] ?? 'Rezervasyon bildirimi',
             $reservation['service_name'],
             $reservation['customer_name'],
             $reservation['consultant_name'],
             $starts,
             $reservation['status'],
-            app_url('/customer/reservations')
+            app_url('/login')
         );
 
         self::queue((string) $reservation['customer_email'], (string) $reservation['customer_name'], $subject, $body, $reservationId, $eventType);

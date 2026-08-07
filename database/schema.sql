@@ -1,16 +1,47 @@
+-- FizyoRez beta - clean installation schema (MySQL 8 / MariaDB 10.4+)
+-- Existing beta databases should run database/migrations/001_beta_foundation.sql instead.
+
+SET NAMES utf8mb4;
+
 CREATE TABLE IF NOT EXISTS users (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    role ENUM('admin', 'consultant', 'customer') NOT NULL,
+    role ENUM('super_admin', 'admin', 'consultant', 'staff', 'customer') NOT NULL,
     name VARCHAR(160) NOT NULL,
     email VARCHAR(190) NOT NULL UNIQUE,
     phone VARCHAR(40) NULL,
     password_hash VARCHAR(255) NOT NULL,
-    status ENUM('active', 'passive') NOT NULL DEFAULT 'active',
+    status ENUM('pending', 'active', 'suspended', 'passive') NOT NULL DEFAULT 'active',
+    email_verified_at DATETIME NULL,
+    privacy_consent_at DATETIME NULL,
     last_login_at DATETIME NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_users_role (role),
     INDEX idx_users_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS roles (
+    id SMALLINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    slug VARCHAR(60) NOT NULL UNIQUE,
+    name VARCHAR(100) NOT NULL,
+    is_system TINYINT(1) NOT NULL DEFAULT 1,
+    sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 100
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS permissions (
+    id SMALLINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    slug VARCHAR(100) NOT NULL UNIQUE,
+    name VARCHAR(160) NOT NULL,
+    permission_group VARCHAR(100) NOT NULL,
+    INDEX idx_permissions_group (permission_group)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id SMALLINT UNSIGNED NOT NULL,
+    permission_id SMALLINT UNSIGNED NOT NULL,
+    PRIMARY KEY (role_id, permission_id),
+    FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+    FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS api_tokens (
@@ -35,7 +66,7 @@ CREATE TABLE IF NOT EXISTS consultant_profiles (
     user_id INT UNSIGNED PRIMARY KEY,
     title VARCHAR(120) NULL,
     bio TEXT NULL,
-    color VARCHAR(20) NOT NULL DEFAULT '#0891b2',
+    color VARCHAR(20) NOT NULL DEFAULT '#0f766e',
     booking_deadline_hours INT UNSIGNED NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -75,7 +106,7 @@ CREATE TABLE IF NOT EXISTS customer_packages (
     starts_at DATE NOT NULL,
     expires_at DATE NOT NULL,
     status ENUM('active', 'frozen', 'expired', 'cancelled') NOT NULL DEFAULT 'active',
-    payment_status ENUM('paid', 'pending', 'cancelled') NOT NULL DEFAULT 'pending',
+    payment_status ENUM('paid', 'pending', 'awaiting_approval', 'cancelled', 'refunded') NOT NULL DEFAULT 'pending',
     low_credit_mail_queued_at DATETIME NULL,
     expiry_mail_queued_at DATETIME NULL,
     payment_mail_queued_at DATETIME NULL,
@@ -118,7 +149,7 @@ CREATE TABLE IF NOT EXISTS reservations (
     starts_at DATETIME NOT NULL,
     ends_at DATETIME NOT NULL,
     status ENUM('pending', 'confirmed', 'cancelled', 'completed', 'no_show') NOT NULL DEFAULT 'confirmed',
-    payment_status ENUM('paid', 'pending', 'cancelled') NOT NULL DEFAULT 'pending',
+    payment_status ENUM('paid', 'pending', 'awaiting_approval', 'cancelled', 'refunded') NOT NULL DEFAULT 'pending',
     price DECIMAL(10,2) NOT NULL DEFAULT 0,
     credits_deducted TINYINT(1) NOT NULL DEFAULT 0,
     late_cancelled TINYINT(1) NOT NULL DEFAULT 0,
@@ -140,6 +171,158 @@ CREATE TABLE IF NOT EXISTS reservations (
     INDEX idx_reservations_payment (payment_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS credit_transactions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    customer_package_id INT UNSIGNED NOT NULL,
+    customer_id INT UNSIGNED NOT NULL,
+    reservation_id BIGINT UNSIGNED NULL,
+    amount INT NOT NULL COMMENT 'Positive adds credit, negative deducts credit',
+    balance_before INT UNSIGNED NOT NULL,
+    balance_after INT UNSIGNED NOT NULL,
+    reason VARCHAR(80) NOT NULL,
+    note VARCHAR(500) NULL,
+    created_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_package_id) REFERENCES customer_packages(id) ON DELETE RESTRICT,
+    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (reservation_id) REFERENCES reservations(id) ON DELETE SET NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_credit_package (customer_package_id, id),
+    INDEX idx_credit_customer (customer_id, id),
+    INDEX idx_credit_reservation (reservation_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS payments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    customer_id INT UNSIGNED NOT NULL,
+    target_type ENUM('package', 'reservation') NOT NULL,
+    target_id BIGINT UNSIGNED NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    currency CHAR(3) NOT NULL DEFAULT 'TRY',
+    method ENUM('cash', 'bank_transfer', 'card_manual', 'paypal_beta', 'other') NOT NULL,
+    status ENUM('pending', 'awaiting_approval', 'paid', 'cancelled', 'refunded') NOT NULL DEFAULT 'pending',
+    reference_no VARCHAR(190) NULL,
+    note VARCHAR(500) NULL,
+    created_by INT UNSIGNED NULL,
+    approved_by INT UNSIGNED NULL,
+    approved_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_payments_customer (customer_id, created_at),
+    INDEX idx_payments_target (target_type, target_id),
+    INDEX idx_payments_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS payment_events (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    payment_id BIGINT UNSIGNED NOT NULL,
+    from_status VARCHAR(40) NULL,
+    to_status VARCHAR(40) NOT NULL,
+    note VARCHAR(500) NULL,
+    created_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_payment_events_payment (payment_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    actor_id INT UNSIGNED NULL,
+    action VARCHAR(120) NOT NULL,
+    entity_type VARCHAR(80) NOT NULL,
+    entity_id BIGINT UNSIGNED NULL,
+    details_json LONGTEXT NULL,
+    ip_address VARCHAR(45) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_audit_actor (actor_id, created_at),
+    INDEX idx_audit_entity (entity_type, entity_id),
+    INDEX idx_audit_action (action, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS clinical_notes (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    customer_id INT UNSIGNED NOT NULL,
+    consultant_id INT UNSIGNED NOT NULL,
+    reservation_id BIGINT UNSIGNED NULL,
+    note_type ENUM('assessment', 'treatment', 'progress', 'discharge') NOT NULL DEFAULT 'treatment',
+    subjective TEXT NULL,
+    objective TEXT NULL,
+    assessment TEXT NULL,
+    plan TEXT NULL,
+    visibility ENUM('internal', 'customer_shared') NOT NULL DEFAULT 'internal',
+    created_by INT UNSIGNED NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (consultant_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (reservation_id) REFERENCES reservations(id) ON DELETE SET NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+    INDEX idx_clinical_customer (customer_id, created_at),
+    INDEX idx_clinical_consultant (consultant_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS patient_history (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    customer_id INT UNSIGNED NOT NULL,
+    history_type ENUM('injury', 'condition', 'allergy', 'goal', 'other') NOT NULL DEFAULT 'other',
+    title VARCHAR(190) NOT NULL,
+    details TEXT NULL,
+    event_date DATE NULL,
+    created_by INT UNSIGNED NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+    INDEX idx_patient_history_customer (customer_id, event_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS exercise_library (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(190) NOT NULL,
+    description TEXT NULL,
+    instructions TEXT NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_by INT UNSIGNED NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+    INDEX idx_exercise_active (active, name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS exercise_programs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    customer_id INT UNSIGNED NOT NULL,
+    title VARCHAR(190) NOT NULL,
+    notes TEXT NULL,
+    starts_at DATE NOT NULL,
+    expires_at DATE NULL,
+    status ENUM('draft', 'active', 'completed', 'cancelled') NOT NULL DEFAULT 'draft',
+    created_by INT UNSIGNED NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+    INDEX idx_program_customer (customer_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS exercise_program_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    program_id BIGINT UNSIGNED NOT NULL,
+    exercise_id INT UNSIGNED NOT NULL,
+    sets_count SMALLINT UNSIGNED NULL,
+    repetitions VARCHAR(60) NULL,
+    hold_seconds SMALLINT UNSIGNED NULL,
+    frequency_text VARCHAR(190) NULL,
+    instructions TEXT NULL,
+    sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    FOREIGN KEY (program_id) REFERENCES exercise_programs(id) ON DELETE CASCADE,
+    FOREIGN KEY (exercise_id) REFERENCES exercise_library(id) ON DELETE RESTRICT,
+    INDEX idx_program_items_program (program_id, sort_order)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS mail_queue (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     to_email VARCHAR(190) NOT NULL,
@@ -158,35 +341,85 @@ CREATE TABLE IF NOT EXISTS mail_queue (
     INDEX idx_mail_queue_status (status, send_after)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT IGNORE INTO settings (setting_key, setting_value) VALUES
-('booking_change_deadline_hours', '12'),
-('late_cancel_burn_credit', '1'),
-('credit_deduction_policy', 'on_booking'),
-('reservation_reminder_hours', '24');
+INSERT IGNORE INTO roles (id, slug, name, is_system, sort_order) VALUES
+(1, 'super_admin', 'Süper Yönetici', 1, 10), (2, 'admin', 'Yönetici', 1, 20),
+(3, 'staff', 'Resepsiyon / Personel', 1, 30), (4, 'consultant', 'Fizyoterapist', 1, 40),
+(5, 'customer', 'Danışan', 1, 50);
 
-INSERT IGNORE INTO users (id, role, name, email, phone, password_hash, status) VALUES
-(1, 'admin', 'Admin Kullanıcı', 'admin@demo.local', '+905550000001', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'active'),
-(2, 'consultant', 'Elif Danışman', 'danisman@demo.local', '+905550000002', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'active'),
-(3, 'customer', 'Deniz Müşteri', 'musteri@demo.local', '+905550000003', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'active');
+INSERT IGNORE INTO permissions (slug, name, permission_group) VALUES
+('dashboard.view', 'Genel bakışı görüntüleme', 'Panel'),
+('users.view', 'Kullanıcıları görüntüleme', 'Kullanıcılar'), ('users.create', 'Kullanıcı oluşturma', 'Kullanıcılar'),
+('users.update', 'Kullanıcı bilgilerini değiştirme', 'Kullanıcılar'), ('users.change_role', 'Kullanıcı rolünü değiştirme', 'Kullanıcılar'),
+('users.change_status', 'Kullanıcı durumunu değiştirme', 'Kullanıcılar'),
+('roles.view', 'Rol matrisini görüntüleme', 'Yetkilendirme'), ('roles.manage', 'Rol yetkilerini değiştirme', 'Yetkilendirme'),
+('reservations.view_all', 'Tüm rezervasyonları görüntüleme', 'Rezervasyon'), ('reservations.manage_all', 'Tüm rezervasyonları yönetme', 'Rezervasyon'),
+('reservations.manage_own', 'Kendi rezervasyonlarını yönetme', 'Rezervasyon'),
+('schedules.view_all', 'Tüm çalışma programlarını görüntüleme', 'Takvim'), ('schedules.manage_all', 'Tüm çalışma programlarını yönetme', 'Takvim'),
+('schedules.manage_own', 'Kendi çalışma programını yönetme', 'Takvim'), ('time_off.manage_all', 'Tüm izinleri yönetme', 'Takvim'),
+('time_off.manage_own', 'Kendi izinlerini yönetme', 'Takvim'),
+('services.manage', 'Hizmetleri yönetme', 'Tanımlar'), ('packages.manage', 'Paketleri yönetme', 'Tanımlar'),
+('credits.adjust', 'Paket haklarını gerekçeli düzeltme', 'Paket ve Haklar'),
+('payments.view_all', 'Tüm ödemeleri görüntüleme', 'Ödemeler'), ('payments.create', 'Manuel ödeme kaydı oluşturma', 'Ödemeler'),
+('payments.approve', 'Ödeme onaylama', 'Ödemeler'), ('payments.refund', 'Ödeme iade işlemi', 'Ödemeler'),
+('clinical.view_all', 'Danışan fizyoterapi kayıtlarını görüntüleme', 'Fizyoterapi Kayıtları'),
+('clinical.create', 'Fizyoterapi değerlendirme ve seans notu ekleme', 'Fizyoterapi Kayıtları'),
+('clinical.edit', 'Fizyoterapi kayıtlarını düzenleme', 'Fizyoterapi Kayıtları'),
+('exercises.manage', 'Egzersiz ve programları yönetme', 'Egzersiz Programı'),
+('reports.view', 'Raporları görüntüleme', 'Raporlar'), ('settings.manage', 'Sistem ayarlarını yönetme', 'Sistem'),
+('audit_logs.view', 'İşlem kayıtlarını görüntüleme', 'Sistem');
+
+-- Yönetici: günlük ve operasyonel yönetim; rol matrisi ve kritik sistem ayarları süper yöneticiye bırakılır.
+INSERT IGNORE INTO role_permissions (role_id, permission_id)
+SELECT 2, id FROM permissions WHERE slug IN (
+    'dashboard.view','users.view','users.create','users.update','users.change_status',
+    'roles.view','reservations.view_all','reservations.manage_all','schedules.view_all','schedules.manage_all',
+    'time_off.manage_all','services.manage','packages.manage','credits.adjust','payments.view_all','payments.create',
+    'payments.approve','payments.refund','clinical.view_all','clinical.create','clinical.edit','exercises.manage','reports.view','audit_logs.view'
+);
+
+-- Resepsiyon / personel: kullanıcı, rezervasyon, takvim, paket ve tahsilat operasyonları.
+INSERT IGNORE INTO role_permissions (role_id, permission_id)
+SELECT 3, id FROM permissions WHERE slug IN (
+    'dashboard.view','users.view','users.create','users.update','reservations.view_all','reservations.manage_all',
+    'schedules.view_all','schedules.manage_all','time_off.manage_all','packages.manage','payments.view_all','payments.create'
+);
+
+-- Fizyoterapist: kendi takvimi/seansları ve fizyoterapi kayıtları.
+INSERT IGNORE INTO role_permissions (role_id, permission_id)
+SELECT 4, id FROM permissions WHERE slug IN (
+    'dashboard.view','reservations.manage_own','schedules.manage_own','time_off.manage_own',
+    'clinical.view_all','clinical.create','clinical.edit','exercises.manage'
+);
+
+INSERT IGNORE INTO settings (setting_key, setting_value) VALUES
+('booking_change_deadline_hours', '12'), ('late_cancel_burn_credit', '1'),
+('credit_deduction_policy', 'on_booking'), ('reservation_reminder_hours', '24'),
+('currency', 'TRY'), ('bank_name', ''), ('bank_iban', ''), ('bank_account_name', '');
+
+-- Beta demo accounts. Password: password (change immediately outside local test environments).
+INSERT IGNORE INTO users (id, role, name, email, phone, password_hash, status, privacy_consent_at) VALUES
+(1, 'super_admin', 'Süper Yönetici', 'admin@demo.local', '+905550000001', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'active', NOW()),
+(2, 'consultant', 'Elif Fizyoterapist', 'danisman@demo.local', '+905550000002', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'active', NOW()),
+(3, 'customer', 'Deniz Danışan', 'musteri@demo.local', '+905550000003', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'active', NOW());
 
 INSERT IGNORE INTO consultant_profiles (user_id, title, bio, color, booking_deadline_hours) VALUES
-(2, 'Reformer ve Fonksiyonel Egzersiz Uzmanı', 'Birebir ve grup dersleri yönetir.', '#0891b2', 12);
+(2, 'Fizyoterapist', 'Birebir ve grup fizyoterapi seanslarını yönetir.', '#0f766e', 12);
 
 INSERT IGNORE INTO services (id, name, description, type, duration_minutes, capacity, price, active) VALUES
-(1, 'Birebir Egzersiz Seansı', 'Danışman eşliğinde birebir çalışma.', 'one_to_one', 60, 1, 900.00, 1),
-(2, 'Grup Reformer Dersi', 'Kapasiteli grup dersi.', 'group', 50, 6, 450.00, 1);
+(1, 'Birebir Fizyoterapi Seansı', 'Kişiye özel fizyoterapi uygulaması.', 'one_to_one', 60, 1, 900.00, 1),
+(2, 'Grup Egzersiz Seansı', 'Fizyoterapist eşliğinde grup egzersizi.', 'group', 50, 6, 450.00, 1);
 
 INSERT IGNORE INTO packages (id, name, description, total_credits, validity_days, price, active) VALUES
-(1, '10 Haklık Paket', '10 ders kullanım hakkı.', 10, 45, 7500.00, 1),
-(2, 'Aylık 8 Hak', '30 gün içinde 8 kullanım hakkı.', 8, 30, 6200.00, 1);
+(1, '10 Seanslık Paket', '10 fizyoterapi seansı kullanım hakkı.', 10, 45, 7500.00, 1),
+(2, 'Aylık 8 Seans', '30 gün içinde 8 seans kullanım hakkı.', 8, 30, 6200.00, 1);
 
 INSERT IGNORE INTO customer_packages (id, customer_id, package_id, credits_total, credits_remaining, starts_at, expires_at, status, payment_status) VALUES
 (1, 3, 1, 10, 10, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 45 DAY), 'active', 'paid');
 
+INSERT IGNORE INTO credit_transactions (id, customer_package_id, customer_id, amount, balance_before, balance_after, reason, note, created_by) VALUES
+(1, 1, 3, 10, 0, 10, 'package_assigned', 'Demo paket açılış bakiyesi', 1);
+
 INSERT IGNORE INTO consultant_availability (id, consultant_id, weekday, start_time, end_time, is_active) VALUES
-(1, 2, 1, '09:00:00', '18:00:00', 1),
-(2, 2, 2, '09:00:00', '18:00:00', 1),
-(3, 2, 3, '09:00:00', '18:00:00', 1),
-(4, 2, 4, '09:00:00', '18:00:00', 1),
-(5, 2, 5, '09:00:00', '18:00:00', 1),
-(6, 2, 6, '10:00:00', '15:00:00', 1);
+(1, 2, 1, '09:00:00', '18:00:00', 1), (2, 2, 2, '09:00:00', '18:00:00', 1),
+(3, 2, 3, '09:00:00', '18:00:00', 1), (4, 2, 4, '09:00:00', '18:00:00', 1),
+(5, 2, 5, '09:00:00', '18:00:00', 1), (6, 2, 6, '10:00:00', '15:00:00', 1);
