@@ -33,9 +33,10 @@ database/migrations/002_wallets_date_calendars.sql
 database/migrations/003_reservation_change_approvals.sql
 database/migrations/004_wallet_adjust_permission.sql
 database/migrations/005_unified_financial_transactions.sql
+database/migrations/006_remove_legacy_finance_tables.sql
 ```
 
-Bu yükseltmeler test cüzdanı, tarih bazlı takvim, rezervasyon tarih değişikliği onayı, gerekçeli bakiye düzeltme yetkisi ve birleşik finans günlüğünü ekler; mevcut kayıtları silmez. `005` numaralı migration eski `payments` ve `wallet_transactions` hareketlerini yeni `financial_transactions` tablosuna kopyalar. Eski tablolar güvenli geçiş ve karşılaştırma için silinmez, uygulamanın yeni işlemleri yalnızca birleşik tabloya yazılır. Yeni tarih kayıtları ilgili takvim ekranı ilk açıldığında otomatik oluşur.
+Bu yükseltmeler test cüzdanı, tarih bazlı takvim, rezervasyon tarih değişikliği onayı, gerekçeli bakiye düzeltme yetkisi ve birleşik finans günlüğünü ekler. `005` numaralı migration eski `payments` ve `wallet_transactions` hareketlerini yeni `financial_transactions` tablosuna kopyalar. `006`, eski `payment_events` geçmişini `audit_logs` tablosuna arşivler; tüm eski kayıtların aktarıldığını sayısal olarak doğruladıktan sonra `payment_events`, `payments` ve `wallet_transactions` tablolarını kaldırır. Eşleşmeyen kayıt varsa hiçbir eski tabloyu silmez ve `BLOCKED` sonucu verir. Yeni tarih kayıtları ilgili takvim ekranı ilk açıldığında otomatik oluşur.
 
 Demo şemasındaki hesaplar yalnızca yerel/beta test içindir ve varsayılan şifreleri `password` değeridir. İnternete açık kurulumda demo hesaplarını pasife alın ve gerçek süper yönetici şifresini hemen değiştirin.
 

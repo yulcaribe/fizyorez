@@ -125,27 +125,6 @@ CREATE TABLE IF NOT EXISTS customer_wallets (
     FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS wallet_transactions (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    customer_id INT UNSIGNED NOT NULL,
-    transaction_type ENUM('topup', 'payment', 'refund', 'manual') NOT NULL DEFAULT 'topup',
-    amount DECIMAL(12,2) NOT NULL,
-    balance_before DECIMAL(12,2) NOT NULL,
-    balance_after DECIMAL(12,2) NOT NULL,
-    status ENUM('approved', 'rejected') NOT NULL,
-    provider VARCHAR(40) NOT NULL DEFAULT 'test_card',
-    reference_no VARCHAR(80) NOT NULL,
-    card_last_four CHAR(4) NULL,
-    note VARCHAR(500) NULL,
-    created_by INT UNSIGNED NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
-    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-    UNIQUE KEY uq_wallet_reference (reference_no),
-    INDEX idx_wallet_transactions_customer (customer_id, id),
-    INDEX idx_wallet_transactions_status (status, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 CREATE TABLE IF NOT EXISTS financial_transactions (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     customer_id INT UNSIGNED NOT NULL,
@@ -308,43 +287,6 @@ CREATE TABLE IF NOT EXISTS credit_transactions (
     INDEX idx_credit_package (customer_package_id, id),
     INDEX idx_credit_customer (customer_id, id),
     INDEX idx_credit_reservation (reservation_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS payments (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    customer_id INT UNSIGNED NOT NULL,
-    target_type ENUM('package', 'reservation') NOT NULL,
-    target_id BIGINT UNSIGNED NOT NULL,
-    amount DECIMAL(12,2) NOT NULL,
-    currency CHAR(3) NOT NULL DEFAULT 'TRY',
-    method ENUM('cash', 'bank_transfer', 'card_manual', 'paypal_beta', 'other') NOT NULL,
-    status ENUM('pending', 'awaiting_approval', 'paid', 'cancelled', 'refunded') NOT NULL DEFAULT 'pending',
-    reference_no VARCHAR(190) NULL,
-    note VARCHAR(500) NULL,
-    created_by INT UNSIGNED NULL,
-    approved_by INT UNSIGNED NULL,
-    approved_at DATETIME NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
-    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-    FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
-    INDEX idx_payments_customer (customer_id, created_at),
-    INDEX idx_payments_target (target_type, target_id),
-    INDEX idx_payments_status (status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS payment_events (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    payment_id BIGINT UNSIGNED NOT NULL,
-    from_status VARCHAR(40) NULL,
-    to_status VARCHAR(40) NOT NULL,
-    note VARCHAR(500) NULL,
-    created_by INT UNSIGNED NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE,
-    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-    INDEX idx_payment_events_payment (payment_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS audit_logs (

@@ -12,6 +12,7 @@ FizyoRez, yalnızca PHP 8 ve MySQL/MariaDB ile çalışan fizyoterapi işletmesi
 - Birebir ve kapasiteli grup seansları, 7 günlük planlama matrisi, çakışma kontrolü ve rol bazlı tarih değişikliği onayı
 - Tamamen bakiye tabanlı satış: danışan onaylanmış bakiyesiyle paket/hak veya tek seans satın alır
 - Yükleme, kesinti, paket, tek seans, düzeltme ve iadeleri birleştiren tek finans hareket defteri
+- Eski ödeme tablolarını doğrulamalı migration ile kaldıran, olay geçmişini denetim günlüğünde koruyan temiz veri modeli
 - Kartın yalnızca marka/son dört hanesini saklayan beta yükleme; tüm yükleme ve düşümler rol bazlı onaya tabi
 - Süper yöneticinin kendi kaydını onaylayabildiği, diğer roller için işlemi oluşturan ile onaylayanı ayıran kontrol
 - Nakit, banka/EFT, manuel kart/POS ve PayPal beta tahsilatlarını danışan bakiyesine aktaran onay akışı
