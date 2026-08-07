@@ -38,7 +38,7 @@ final class ReservationService
 
         $order = !empty($filters['from']) ? 'ASC' : 'DESC';
         return DB::fetchAll(
-            'SELECT r.*, s.name AS service_name, s.type AS service_type,
+            'SELECT r.*, s.name AS service_name, s.type AS service_type, s.duration_minutes,
                     c.name AS customer_name, c.email AS customer_email,
                     k.name AS consultant_name, k.email AS consultant_email,
                     cr.id AS pending_change_id, cr.requested_starts_at AS pending_requested_starts_at
@@ -203,7 +203,7 @@ final class ReservationService
 
         return DB::fetchAll(
             'SELECT cr.*, r.starts_at AS current_starts_at, r.status AS reservation_status,
-                    c.name AS customer_name, k.name AS consultant_name, s.name AS service_name,
+                    c.name AS customer_name, k.name AS consultant_name, s.name AS service_name, s.duration_minutes,
                     requester.name AS requested_by_name
              FROM reservation_change_requests cr
              INNER JOIN reservations r ON r.id = cr.reservation_id
@@ -307,7 +307,7 @@ final class ReservationService
 
         return DB::fetchAll(
             'SELECT r.id, r.consultant_id, r.starts_at, r.ends_at, r.status,
-                    c.name AS customer_name, s.name AS service_name
+                    c.name AS customer_name, s.name AS service_name, s.duration_minutes
              FROM reservations r
              INNER JOIN users c ON c.id = r.customer_id
              INNER JOIN services s ON s.id = r.service_id

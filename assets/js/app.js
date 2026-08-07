@@ -18,7 +18,7 @@ if (menuButton) {
     });
 }
 
-document.querySelectorAll('[data-payment-package]').forEach((select) => {
+document.querySelectorAll('[data-payment-target]').forEach((select) => {
     const form = select.closest('form');
     const customer = form?.querySelector('[name="customer_id"]');
     const amount = form?.querySelector('[name="amount"]');
@@ -52,7 +52,10 @@ document.querySelectorAll('[data-book-consultant]').forEach((button) => {
         const consultant = form?.querySelector('[name="consultant_id"]');
         const startsAt = form?.querySelector('[name="starts_at"]');
         if (consultant) consultant.value = button.dataset.bookConsultant || '';
-        if (startsAt) startsAt.value = `${button.dataset.bookDate}T${button.dataset.bookTime}`;
+        if (startsAt) {
+            startsAt.value = `${button.dataset.bookDate}T${button.dataset.bookTime}`;
+            startsAt.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         form?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         startsAt?.focus({ preventScroll: true });
     });
@@ -69,11 +72,41 @@ document.querySelectorAll('[data-edit-reservation]').forEach((button) => {
         form.hidden = false;
         if (empty) empty.hidden = true;
         reservationId.value = button.dataset.editReservation || '';
+        form.dataset.fixedDuration = button.dataset.editDuration || '';
         startsAt.value = button.dataset.editStart || '';
+        startsAt.dispatchEvent(new Event('input', { bubbles: true }));
         if (label) label.textContent = button.dataset.editLabel || 'Seçili randevu';
         form.scrollIntoView({ behavior: 'smooth', block: 'center' });
         startsAt.focus({ preventScroll: true });
     });
+});
+
+document.querySelectorAll('[data-reservation-timing]').forEach((form) => {
+    const service = form.querySelector('[data-reservation-service]');
+    const startsAt = form.querySelector('[data-reservation-start]');
+    const endsAt = form.querySelector('[data-reservation-end]');
+    if (!startsAt || !endsAt) return;
+
+    const calculateEnd = () => {
+        const selectedDuration = service?.selectedOptions[0]?.dataset.duration;
+        const duration = Number(selectedDuration || form.dataset.fixedDuration || 0);
+        if (!startsAt.value || !Number.isFinite(duration) || duration <= 0) {
+            endsAt.value = '';
+            return;
+        }
+        const end = new Date(`${startsAt.value}:00`);
+        if (Number.isNaN(end.getTime())) {
+            endsAt.value = '';
+            return;
+        }
+        end.setMinutes(end.getMinutes() + duration);
+        const pad = (value) => String(value).padStart(2, '0');
+        endsAt.value = `${pad(end.getDate())}-${pad(end.getMonth() + 1)}-${end.getFullYear()} ${pad(end.getHours())}:${pad(end.getMinutes())}`;
+    };
+
+    startsAt.addEventListener('input', calculateEnd);
+    service?.addEventListener('change', calculateEnd);
+    calculateEnd();
 });
 
 document.querySelectorAll('[data-confirm]').forEach((control) => {

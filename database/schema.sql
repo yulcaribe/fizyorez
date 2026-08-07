@@ -1,5 +1,5 @@
 -- FizyoRez beta - clean installation schema (MySQL 8 / MariaDB 10.4+)
--- Existing beta databases should run migrations 002 and 003 in numeric order instead.
+-- Existing beta databases should run migrations 002 through 004 in numeric order instead.
 
 SET NAMES utf8mb4;
 
@@ -434,6 +434,7 @@ INSERT IGNORE INTO permissions (slug, name, permission_group) VALUES
 ('time_off.manage_own', 'Kendi izinlerini yönetme', 'Takvim'),
 ('services.manage', 'Hizmetleri yönetme', 'Tanımlar'), ('packages.manage', 'Paketleri yönetme', 'Tanımlar'),
 ('credits.adjust', 'Paket haklarını gerekçeli düzeltme', 'Paket ve Haklar'),
+('wallets.adjust', 'Danışan bakiyesini gerekçeli düzeltme', 'Ödemeler'),
 ('payments.view_all', 'Tüm ödemeleri görüntüleme', 'Ödemeler'), ('payments.create', 'Manuel ödeme kaydı oluşturma', 'Ödemeler'),
 ('payments.approve', 'Ödeme onaylama', 'Ödemeler'), ('payments.refund', 'Ödeme iade işlemi', 'Ödemeler'),
 ('clinical.view_all', 'Danışan fizyoterapi kayıtlarını görüntüleme', 'Fizyoterapi Kayıtları'),
@@ -448,7 +449,7 @@ INSERT IGNORE INTO role_permissions (role_id, permission_id)
 SELECT 2, id FROM permissions WHERE slug IN (
     'dashboard.view','users.view','users.create','users.update','users.change_status',
     'roles.view','reservations.view_all','reservations.manage_all','reservations.reschedule_approve','schedules.view_all','schedules.manage_all',
-    'time_off.manage_all','services.manage','packages.manage','credits.adjust','payments.view_all','payments.create',
+    'time_off.manage_all','services.manage','packages.manage','credits.adjust','wallets.adjust','payments.view_all','payments.create',
     'payments.approve','payments.refund','clinical.view_all','clinical.create','clinical.edit','exercises.manage','reports.view','audit_logs.view'
 );
 

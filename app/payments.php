@@ -53,18 +53,27 @@ final class PaymentService
     public static function create(array $actor, array $data): array
     {
         Authorization::require($actor, 'payments.create');
-        $customerId = (int) ($data['customer_id'] ?? 0);
-        $customer = DB::fetch('SELECT id FROM users WHERE id = ? AND role = "customer" AND status = "active"', [$customerId]);
-        $method = (string) ($data['method'] ?? 'cash');
+        $method = self::normalizeMethod((string) ($data['method'] ?? 'cash'));
         $amount = round((float) ($data['amount'] ?? 0), 2);
         $targetType = (string) ($data['target_type'] ?? 'package');
         $targetId = (int) ($data['target_id'] ?? 0);
 
-        if (!$customer || !isset(self::METHODS[$method]) || $amount <= 0 || !in_array($targetType, ['package', 'reservation'], true) || $targetId < 1) {
-            throw new RuntimeException('Ödeme bilgileri geçersiz.');
+        if (!isset(self::METHODS[$method])) {
+            throw new RuntimeException('Seçilen ödeme yöntemi geçersiz.');
+        }
+        if ($amount <= 0) {
+            throw new RuntimeException('Ödeme tutarı sıfırdan büyük olmalıdır.');
+        }
+        if (!in_array($targetType, ['package', 'reservation'], true) || $targetId < 1) {
+            throw new RuntimeException('Ödeme yapılacak paket veya seans seçimi geçersiz.');
         }
 
-        $target = self::assertTargetOwner($customerId, $targetType, $targetId);
+        $target = self::findTarget($targetType, $targetId);
+        $customerId = (int) $target['customer_id'];
+        $customer = DB::fetch('SELECT id FROM users WHERE id = ? AND role = "customer" AND status = "active"', [$customerId]);
+        if (!$customer) {
+            throw new RuntimeException('Ödeme kaydının danışanı aktif değil veya bulunamadı.');
+        }
         if (($target['payment_status'] ?? '') === 'paid') {
             throw new RuntimeException('Bu paket veya seans zaten ödenmiş görünüyor.');
         }
@@ -218,15 +227,29 @@ final class PaymentService
         return $payment;
     }
 
-    private static function assertTargetOwner(int $customerId, string $targetType, int $targetId): array
+    private static function findTarget(string $targetType, int $targetId): array
     {
         $table = $targetType === 'package' ? 'customer_packages' : 'reservations';
-        $target = DB::fetch('SELECT id, payment_status FROM ' . $table . ' WHERE id = ? AND customer_id = ?', [$targetId, $customerId]);
+        $target = DB::fetch('SELECT id, customer_id, payment_status FROM ' . $table . ' WHERE id = ?', [$targetId]);
         if (!$target) {
-            throw new RuntimeException('Ödeme hedefi bu danışana ait değil.');
+            throw new RuntimeException('Ödeme yapılacak paket veya seans bulunamadı.');
         }
 
         return $target;
+    }
+
+    private static function normalizeMethod(string $method): string
+    {
+        $method = strtolower(trim($method));
+        $aliases = [
+            'bank' => 'bank_transfer',
+            'eft' => 'bank_transfer',
+            'card' => 'card_manual',
+            'pos' => 'card_manual',
+            'paypal' => 'paypal_beta',
+        ];
+
+        return $aliases[$method] ?? $method;
     }
 
     private static function syncTargetStatus(array $payment, string $status): void

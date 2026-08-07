@@ -31,9 +31,10 @@ Mevcut FizyoRez veritabanındaki kullanıcı, paket, ödeme ve randevuları koru
 ```text
 database/migrations/002_wallets_date_calendars.sql
 database/migrations/003_reservation_change_approvals.sql
+database/migrations/004_wallet_adjust_permission.sql
 ```
 
-Bu yükseltmeler test cüzdanı, tarih bazlı takvim ve rezervasyon tarih değişikliği onay kayıtlarını ekler; mevcut kayıtları silmez. Yeni tarih kayıtları ilgili takvim ekranı ilk açıldığında otomatik oluşur.
+Bu yükseltmeler test cüzdanı, tarih bazlı takvim, rezervasyon tarih değişikliği onayı ve gerekçeli bakiye düzeltme yetkisini ekler; mevcut kayıtları silmez. Yeni tarih kayıtları ilgili takvim ekranı ilk açıldığında otomatik oluşur.
 
 Demo şemasındaki hesaplar yalnızca yerel/beta test içindir ve varsayılan şifreleri `password` değeridir. İnternete açık kurulumda demo hesaplarını pasife alın ve gerçek süper yönetici şifresini hemen değiştirin.
 
