@@ -97,6 +97,7 @@ function handle_web_action(array $user, string $path): never
             case 'reschedule_reservation': ReservationService::reschedule($user, (int) $_POST['reservation_id'], (string) $_POST['starts_at']); break;
             case 'set_reservation_status': ReservationService::setStatus($user, (int) $_POST['reservation_id'], (string) $_POST['status']); break;
             case 'save_date_availability': ScheduleService::saveDate($user, $_POST); break;
+            case 'clear_date_availability': ScheduleService::clearDate($user, $_POST); break;
             case 'generate_calendar': ScheduleService::generateCalendar($user, (int) ($_POST['consultant_id'] ?? 0), (string) $_POST['from_date'], (string) $_POST['to_date']); break;
             case 'add_time_off': ScheduleService::addTimeOff($user, $_POST); break;
             case 'delete_time_off': ScheduleService::deleteTimeOff($user, (int) $_POST['time_off_id']); break;
@@ -393,14 +394,26 @@ function render_packages(array $actor): void
 function render_reservations(array $user, string $path): void
 {
     $filters = $path === '/customer/book' ? ['from' => date('Y-m-d H:i:s')] : [];
+    if ($path === '/customer/book') render_booking_matrix();
     ?><section class="panel"><div class="section-heading"><div><p class="eyebrow">Birebir ve grup seansları</p><h2>Yeni rezervasyon</h2></div></div><?php render_reservation_form($user); ?></section><?php render_reservation_table($user, ReservationService::list($user, $filters));
+}
+
+function render_booking_matrix(): void
+{
+    $matrix = ScheduleService::bookingMatrix(date('Y-m-d'), date('Y-m-d', strtotime('+6 days'))); ?>
+    <section class="panel booking-matrix-panel"><div class="section-heading"><div><p class="eyebrow">Bugünden itibaren 7 gün</p><h2>Fizyoterapist çalışma takvimi</h2><p class="muted">Yeşil çalışma saatine tıklayarak fizyoterapist ve tarihi rezervasyon formuna aktarabilirsiniz.</p></div></div>
+    <?php if ($matrix['consultants']): ?><div class="booking-matrix-wrap"><table class="booking-matrix"><thead><tr><th>Gün / Tarih</th><?php foreach ($matrix['consultants'] as $consultant): ?><th><?= e($consultant['name']) ?></th><?php endforeach; ?></tr></thead><tbody>
+    <?php foreach ($matrix['days'] as $day): $dayDate = new DateTimeImmutable((string) $day['work_date']); ?><tr><th><strong><?= e(date_only((string) $day['work_date'])) ?></strong><small><?= e(weekdays()[(int) $dayDate->format('N')]) ?></small></th><?php foreach ($matrix['consultants'] as $consultant): $availability = $day['consultants'][(int) $consultant['id']]; $isAvailable = (int) $availability['is_working'] === 1 && $availability['slots']; ?><td>
+        <?php if ($isAvailable): ?><div class="booking-slot-list"><?php foreach ($availability['slots'] as $slot): ?><button type="button" class="booking-slot-cell" data-book-consultant="<?= e($consultant['id']) ?>" data-book-date="<?= e($day['work_date']) ?>" data-book-time="<?= e(substr((string) $slot['start_time'], 0, 5)) ?>"><strong><?= e(substr((string) $slot['start_time'], 0, 5) . '–' . substr((string) $slot['end_time'], 0, 5)) ?></strong><small>Seç</small></button><?php endforeach; ?></div>
+        <?php else: ?><span class="booking-slot-cell is-closed">Müsait değil</span><?php endif; ?>
+    </td><?php endforeach; ?></tr><?php endforeach; ?></tbody></table></div><?php else: ?><p class="empty">Aktif fizyoterapist bulunamadı.</p><?php endif; ?></section><?php
 }
 
 function render_reservation_form(array $user): void
 {
     $services = DB::fetchAll('SELECT * FROM services WHERE active = 1 ORDER BY name'); $physios = consultants(); $customerRows = customers();
     $ownPackages = $user['role'] === 'customer' ? DB::fetchAll(Management::customerPackageSql() . ' WHERE cp.customer_id = ? AND cp.status = "active" ORDER BY cp.expires_at', [$user['id']]) : []; $manageAll = can($user, 'reservations.manage_all'); ?>
-    <form method="post" class="form-grid"><?= csrf_field() ?><input type="hidden" name="action" value="create_reservation">
+    <form method="post" class="form-grid" data-reservation-form><?= csrf_field() ?><input type="hidden" name="action" value="create_reservation">
     <?php if ($manageAll): ?><label>Danışan<select name="customer_id"><?php options($customerRows); ?></select></label><label>Fizyoterapist<select name="consultant_id"><?php options($physios); ?></select></label><?php elseif ($user['role'] === 'consultant'): ?><label>Danışan<select name="customer_id"><?php options($customerRows); ?></select></label><?php else: ?><label>Fizyoterapist<select name="consultant_id"><?php options($physios); ?></select></label><?php endif; ?>
     <label>Hizmet<select name="service_id"><?php options($services); ?></select></label><label>Rezervasyon tipi<select name="reservation_type" data-toggle-package><option value="package">Paket hakkı</option><option value="single">Tek seans</option></select></label>
     <?php if ($user['role'] === 'customer'): ?><label data-package-field>Paket<select name="customer_package_id"><option value="">Süresi en yakın paket</option><?php options($ownPackages, 'package_name'); ?></select></label><?php endif; ?>
@@ -446,12 +459,12 @@ function render_availability(array $user): void
             $isWorking = (int) $day['is_working'] === 1;
             $dayDate = new DateTimeImmutable((string) $day['work_date']); ?>
             <details class="schedule-item <?= $isWorking ? 'is-working' : 'is-closed' ?>"><summary class="schedule-summary"><strong><?= e(date_only((string) $day['work_date'])) ?></strong><span><?= e(weekdays()[(int) $dayDate->format('N')]) ?></span><span class="schedule-hours"><?= e($isWorking && $slotLabels ? implode(' · ', $slotLabels) : 'Müsaitlik kapalı') ?></span><span><span class="badge <?= $isWorking ? 'active' : 'passive' ?>"><?= $isWorking ? 'Müsait' : 'Kapalı' ?></span></span><span class="schedule-action">Düzenle</span></summary>
-                <form method="post" class="schedule-edit-form"><?= csrf_field() ?><input type="hidden" name="action" value="save_date_availability"><input type="hidden" name="consultant_id" value="<?= e($selectedConsultantId) ?>"><input type="hidden" name="work_date" value="<?= e($day['work_date']) ?>"><input type="hidden" name="is_working" value="0">
+                <form method="post" class="schedule-edit-form"><?= csrf_field() ?><input type="hidden" name="consultant_id" value="<?= e($selectedConsultantId) ?>"><input type="hidden" name="work_date" value="<?= e($day['work_date']) ?>"><input type="hidden" name="is_working" value="0">
                     <label class="schedule-working-toggle"><input type="checkbox" name="is_working" value="1" <?= $isWorking ? 'checked' : '' ?>><span><strong>Bu tarihte çalışıyor</strong><small>Kapalı bırakmak için işareti kaldırın.</small></span></label>
                     <div class="schedule-period"><label class="check-label"><input type="checkbox" name="morning" value="1" <?= ($morning || !$isWorking) ? 'checked' : '' ?>><span>Sabah</span></label><label>Başlangıç<input type="time" name="morning_start" value="<?= e($morning ? substr((string) $morning['start_time'], 0, 5) : '08:00') ?>"></label><label>Bitiş<input type="time" name="morning_end" value="<?= e($morning ? substr((string) $morning['end_time'], 0, 5) : '12:00') ?>"></label></div>
                     <div class="schedule-period"><label class="check-label"><input type="checkbox" name="afternoon" value="1" <?= ($afternoon || !$isWorking) ? 'checked' : '' ?>><span>Öğleden sonra</span></label><label>Başlangıç<input type="time" name="afternoon_start" value="<?= e($afternoon ? substr((string) $afternoon['start_time'], 0, 5) : '13:00') ?>"></label><label>Bitiş<input type="time" name="afternoon_end" value="<?= e($afternoon ? substr((string) $afternoon['end_time'], 0, 5) : '18:00') ?>"></label></div>
                     <?php if ($custom): ?><input type="hidden" name="custom_start" value="<?= e(substr((string) $custom['start_time'], 0, 5)) ?>"><input type="hidden" name="custom_end" value="<?= e(substr((string) $custom['end_time'], 0, 5)) ?>"><?php endif; ?>
-                    <button class="btn btn-primary">Müsaitliği Kaydet</button>
+                    <div class="schedule-form-actions"><button class="btn btn-primary" name="action" value="save_date_availability">Müsaitliği Kaydet</button><button class="btn btn-danger" name="action" value="clear_date_availability" formnovalidate data-confirm="Bu tarihin çalışma programı silinsin mi?">Çalışma Programını Sil</button></div>
                 </form>
             </details><?php endforeach; ?><?php if (!$days): ?><p class="empty">Bu tarih aralığında kayıt yok.</p><?php endif; ?></div></section>
     <?php elseif ($manageAll): ?><section class="panel empty-state"><h2>Düzenlenecek fizyoterapisti seçin</h2><p>Yukarıdaki listede fizyoterapistin yanındaki Düzenle düğmesine basın.</p></section><?php endif;

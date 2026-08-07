@@ -329,6 +329,21 @@ details.user-row > .user-row-summary:hover { background: #f8fbfa; }
 .wallet-hero h2 { margin: 2px 0 4px; font-size: clamp(35px, 5vw, 52px); letter-spacing: -.055em; }
 .wallet-hero p:last-child { margin: 0; color: #c7e8e3; }
 .wallet-hero .eyebrow { color: #8ee0d5; }
+.booking-matrix-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+.booking-matrix { width: max-content; min-width: 760px; table-layout: auto; }
+.booking-matrix th, .booking-matrix td { min-width: 180px; padding: 9px; border-right: 1px solid var(--line); text-align: center; }
+.booking-matrix th:first-child { position: sticky; z-index: 2; left: 0; width: 145px; min-width: 145px; background: var(--surface-soft); text-align: left; }
+.booking-matrix thead th:first-child { z-index: 3; }
+.booking-matrix tbody th strong, .booking-matrix tbody th small { display: block; }
+.booking-matrix tbody th strong { color: var(--ink-950); font-size: 13px; }
+.booking-matrix tbody th small { margin-top: 3px; }
+.booking-slot-list { display: grid; gap: 6px; }
+.booking-slot-cell { display: grid; width: 100%; min-height: 58px; place-content: center; gap: 4px; padding: 9px; border: 1px solid #bce3dc; border-radius: 10px; background: var(--brand-50); color: var(--brand-700); text-align: center; }
+button.booking-slot-cell { cursor: pointer; transition: border-color .15s, background .15s, transform .15s; }
+button.booking-slot-cell:hover { transform: translateY(-1px); border-color: var(--brand-500); background: var(--brand-100); }
+.booking-slot-cell strong { font-size: 12px; }
+.booking-slot-cell small { color: var(--brand-700); font-size: 10px; font-weight: 850; }
+.booking-slot-cell.is-closed { border-color: #e2e9e7; background: #f6f8f8; color: #91a09e; font-size: 11px; font-weight: 750; }
 .physio-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
 .physio-option { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: white; transition: border-color .15s, background .15s, transform .15s; }
 .physio-option:hover { transform: translateY(-1px); border-color: #acd9d2; background: var(--brand-50); }
@@ -358,6 +373,7 @@ details.user-row > .user-row-summary:hover { background: #f8fbfa; }
 .schedule-working-toggle span { display: grid; gap: 3px; }
 .schedule-period { display: grid; grid-template-columns: auto 1fr 1fr; align-items: end; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 11px; background: white; }
 .schedule-period .check-label { align-self: center; padding-right: 5px; }
+.schedule-form-actions { display: grid; gap: 8px; }
 
 hr { width: 100%; height: 1px; margin: 5px 0; border: 0; background: var(--line); }
 

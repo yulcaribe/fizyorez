@@ -45,3 +45,23 @@ document.querySelectorAll('[data-card-expiry]').forEach((input) => {
         input.value = digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
     });
 });
+
+document.querySelectorAll('[data-book-consultant]').forEach((button) => {
+    button.addEventListener('click', () => {
+        const form = document.querySelector('[data-reservation-form]');
+        const consultant = form?.querySelector('[name="consultant_id"]');
+        const startsAt = form?.querySelector('[name="starts_at"]');
+        if (consultant) consultant.value = button.dataset.bookConsultant || '';
+        if (startsAt) startsAt.value = `${button.dataset.bookDate}T${button.dataset.bookTime}`;
+        form?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        startsAt?.focus({ preventScroll: true });
+    });
+});
+
+document.querySelectorAll('[data-confirm]').forEach((control) => {
+    control.addEventListener('click', (event) => {
+        if (!window.confirm(control.dataset.confirm || 'Bu işlemi onaylıyor musunuz?')) {
+            event.preventDefault();
+        }
+    });
+});

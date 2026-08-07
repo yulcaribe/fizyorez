@@ -432,7 +432,7 @@ final class ReservationService
             }
         }
         if ($coveredUntil === null || $coveredUntil < $endTime) {
-            throw new RuntimeException('Fizyoterapist bu saat aralığında müsait değil.');
+            throw new RuntimeException('Fizyoterapist seçtiğiniz tarih ve saat aralığında müsait değil.');
         }
 
         $timeOff = DB::fetch(

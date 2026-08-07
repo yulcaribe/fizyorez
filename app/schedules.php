@@ -79,6 +79,64 @@ final class ScheduleService
         return array_values($days);
     }
 
+    public static function bookingMatrix(string $from, string $to): array
+    {
+        $start = self::normalizeDate($from);
+        $end = self::normalizeDate($to);
+        if ($start > $end || $start->diff($end)->days > 14) {
+            throw new RuntimeException('Rezervasyon takvimi en fazla 15 günlük bir aralık olabilir.');
+        }
+
+        self::upgradeDefaultHours();
+        $consultants = DB::fetchAll(
+            'SELECT id, name FROM users WHERE role = "consultant" AND status = "active" ORDER BY name'
+        );
+        foreach ($consultants as $consultant) {
+            self::ensureDefaultRange((int) $consultant['id'], $start, $end);
+        }
+
+        $days = [];
+        for ($day = $start; $day <= $end; $day = $day->modify('+1 day')) {
+            $date = $day->format('Y-m-d');
+            $days[$date] = ['work_date' => $date, 'consultants' => []];
+            foreach ($consultants as $consultant) {
+                $days[$date]['consultants'][(int) $consultant['id']] = [
+                    'is_working' => 0,
+                    'slots' => [],
+                ];
+            }
+        }
+
+        $ids = array_map(static fn (array $item): int => (int) $item['id'], $consultants);
+        if ($ids !== []) {
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $rows = DB::fetchAll(
+                'SELECT d.consultant_id, d.work_date, d.is_working, s.start_time, s.end_time
+                 FROM consultant_calendar_days d
+                 LEFT JOIN consultant_calendar_slots s ON s.calendar_day_id = d.id
+                 WHERE d.consultant_id IN (' . $placeholders . ') AND d.work_date BETWEEN ? AND ?
+                 ORDER BY d.work_date, d.consultant_id, s.start_time',
+                [...$ids, $start->format('Y-m-d'), $end->format('Y-m-d')]
+            );
+            foreach ($rows as $row) {
+                $date = (string) $row['work_date'];
+                $consultantId = (int) $row['consultant_id'];
+                if (!isset($days[$date]['consultants'][$consultantId])) {
+                    continue;
+                }
+                $days[$date]['consultants'][$consultantId]['is_working'] = (int) $row['is_working'];
+                if ($row['start_time'] !== null && $row['end_time'] !== null) {
+                    $days[$date]['consultants'][$consultantId]['slots'][] = [
+                        'start_time' => (string) $row['start_time'],
+                        'end_time' => (string) $row['end_time'],
+                    ];
+                }
+            }
+        }
+
+        return ['consultants' => $consultants, 'days' => array_values($days)];
+    }
+
     public static function saveDate(array $actor, array $data): void
     {
         $consultantId = self::resolveConsultantId($actor, (int) ($data['consultant_id'] ?? 0));
@@ -141,6 +199,37 @@ final class ScheduleService
                 'consultant_id' => $consultantId,
                 'work_date' => $date->format('Y-m-d'),
                 'periods' => array_column($slots, 0),
+            ]);
+            DB::pdo()->commit();
+        } catch (Throwable $e) {
+            DB::pdo()->rollBack();
+            throw $e;
+        }
+    }
+
+    public static function clearDate(array $actor, array $data): void
+    {
+        $consultantId = self::resolveConsultantId($actor, (int) ($data['consultant_id'] ?? 0));
+        $date = self::normalizeDate((string) ($data['work_date'] ?? ''));
+        $workDate = $date->format('Y-m-d');
+        self::assertReservationsFit($consultantId, $workDate, []);
+
+        DB::pdo()->beginTransaction();
+        try {
+            DB::execute(
+                'INSERT INTO consultant_calendar_days (consultant_id, work_date, is_working, source, updated_by, created_at, updated_at)
+                 VALUES (?, ?, 0, "manual", ?, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE is_working = 0, source = "manual", updated_by = VALUES(updated_by), updated_at = NOW()',
+                [$consultantId, $workDate, $actor['id']]
+            );
+            $day = DB::fetch(
+                'SELECT id FROM consultant_calendar_days WHERE consultant_id = ? AND work_date = ? FOR UPDATE',
+                [$consultantId, $workDate]
+            );
+            DB::execute('DELETE FROM consultant_calendar_slots WHERE calendar_day_id = ?', [$day['id']]);
+            Audit::record((int) $actor['id'], 'schedule.date_cleared', 'consultant_calendar_day', (int) $day['id'], [
+                'consultant_id' => $consultantId,
+                'work_date' => $workDate,
             ]);
             DB::pdo()->commit();
         } catch (Throwable $e) {
