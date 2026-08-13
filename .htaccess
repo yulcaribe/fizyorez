@@ -1,7 +1,15 @@
 Options -Indexes
-DirectoryIndex index.php
+DirectoryIndex index.php index.html
 
 RewriteEngine On
+
+# beyan.yulcaribe.com kendi document root'u tarafindan yonetilir.
+# Bu istekleri Fizyorez front controller'ina gonderme.
+RewriteCond %{HTTP_HOST} ^beyan\.yulcaribe\.com(?::[0-9]+)?$ [NC]
+RewriteRule ^ - [L]
+
+# Ana domain uzerinden /beyan yolu kullanilirsa da alt uygulamaya dokunma.
+RewriteRule ^beyan(?:/|$) - [L,NC]
 
 RewriteCond %{REQUEST_FILENAME} -f [OR]
 RewriteCond %{REQUEST_FILENAME} -d
